@@ -5,8 +5,14 @@ import type { DockerExecutionResult, ShannonDockerConfig } from "./types"
 import { DOCKER_CONTAINER_NAME, DOCKER_IMAGE_NAME, DEFAULT_TIMEOUT } from "./constants"
 
 const execAsync = promisify(exec)
+const MAX_BUFFER = 50 * 1024 * 1024 // 50MB
 
-const MAX_BUFFER = 50 * 1024 * 1024 // 50MB — large scan outputs (nmap, nuclei)
+// ============================================================
+// Native Mode — runs tools directly on Kali Linux host
+// No Docker required when SHANNON_NATIVE_MODE=true
+// ============================================================
+const NATIVE_MODE = process.env.SHANNON_NATIVE_MODE === "true" ||
+  process.env.SHANNON_NATIVE_MODE === "1"
 
 export class DockerManager {
   private static instance: DockerManager | null = null
@@ -31,150 +37,155 @@ export class DockerManager {
   }
 
   async ensureRunning(): Promise<void> {
+    if (NATIVE_MODE) {
+      // Native Kali — no container needed
+      console.log(pc.red("[Shadow Core] Native Mode — running directly on Kali Linux host"))
+      this.containerRunning = true
+      return
+    }
+
     if (this.containerRunning) {
       try {
         const { stdout } = await execAsync(
           `docker inspect -f '{{.State.Running}}' ${this.containerName}`
         )
         if (stdout.trim() === "true") return
-      } catch (error) {
-        console.warn(
-          pc.yellow(`[DockerManager] Container health check failed, resetting state`),
-          error instanceof Error ? error.message : error
-        )
+      } catch {
+        this.containerRunning = false
       }
-      this.containerRunning = false
     }
 
     try {
       await execAsync("docker --version")
     } catch {
       throw new Error(
-        "Docker is not installed. Install Docker Desktop: https://docs.docker.com/get-docker/"
+        "[Shadow Core] Docker not found.\n" +
+        "Run in Native Mode instead:\n" +
+        "  export SHANNON_NATIVE_MODE=true\n" +
+        "  shadow\n" +
+        "This runs tools directly on your Kali Linux host."
       )
     }
 
     try {
       const { stdout } = await execAsync(
-        `docker inspect -f '{{.State.Running}}' ${this.containerName}`
+        `docker inspect -f '{{.State.Running}}' ${this.containerName} 2>/dev/null`
       )
       if (stdout.trim() === "true") {
-        console.log(pc.green(`[DockerManager] Container "${this.containerName}" already running`))
         this.containerRunning = true
         return
       }
-      console.log(pc.cyan(`[DockerManager] Removing stopped container "${this.containerName}"...`))
-      await execAsync(`docker rm -f ${this.containerName}`)
     } catch {
-      // Container doesn't exist yet — expected on first run
+      // container doesn't exist yet
     }
 
-    try {
-      await execAsync(`docker image inspect ${this.imageName}`)
-    } catch {
-      throw new Error(
-        `Docker image "${this.imageName}" not found. Build it first:\n` +
-          `  docker build -t ${this.imageName} .`
-      )
-    }
-
-    console.log(pc.cyan(`[DockerManager] Starting container "${this.containerName}"...`))
-    const cwd = process.cwd()
+    console.log(pc.yellow(`[Shadow Core] Starting Docker container...`))
     await execAsync(
-      `docker run -d --name ${this.containerName} --network host ` +
-        `--cap-add=NET_RAW --cap-add=NET_ADMIN ` +
-        `-v "${cwd}:/workspace" ${this.imageName} tail -f /dev/null`
+      `docker run -d --name ${this.containerName} --rm \
+       --network host \
+       -v /tmp/shannon:/tmp/shannon \
+       ${this.imageName} tail -f /dev/null`,
+      { timeout: 30000 }
     )
-
     this.containerRunning = true
-    console.log(pc.green(`[DockerManager] Container "${this.containerName}" is running`))
   }
 
   async exec(command: string, timeout = DEFAULT_TIMEOUT): Promise<DockerExecutionResult> {
-    if (!this.containerRunning) {
-      await this.ensureRunning()
-    }
-
-    const startTime = Date.now()
+    const start = Date.now()
 
     try {
-      // Base64-encode the command to avoid all shell escaping issues.
-      // The encoded string contains only [A-Za-z0-9+/=] — safe in any shell context.
-      // Decode to a unique temp file so the command's own stdin remains available,
-      // and concurrent exec() calls don't collide.
-      const encoded = Buffer.from(command).toString("base64")
-      const cmdId = `_sh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-      const wrapper =
-        `echo "${encoded}" | base64 -d > /tmp/${cmdId}.sh && ` +
-        `bash /tmp/${cmdId}.sh; _rc=$?; rm -f /tmp/${cmdId}.sh; exit $_rc`
+      await this.ensureRunning()
 
-      const { stdout, stderr } = await execAsync(
-        `docker exec ${this.containerName} bash -c '${wrapper}'`,
-        { timeout, maxBuffer: MAX_BUFFER }
-      )
+      let fullCommand: string
+
+      if (NATIVE_MODE) {
+        // Execute directly on the host (Kali Native)
+        fullCommand = command
+      } else {
+        // Execute inside Docker container
+        const escaped = command.replace(/'/g, `'\\''`)
+        fullCommand = `docker exec ${this.containerName} sh -c '${escaped}'`
+      }
+
+      const { stdout, stderr } = await execAsync(fullCommand, {
+        timeout,
+        maxBuffer: MAX_BUFFER,
+      })
 
       return {
         success: true,
-        stdout,
-        stderr,
+        stdout: stdout ?? "",
+        stderr: stderr ?? "",
         exitCode: 0,
-        duration: Date.now() - startTime,
+        duration: Date.now() - start,
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as {
+        stdout?: string
+        stderr?: string
+        code?: number
+        message?: string
+      }
       return {
         success: false,
-        stdout: error.stdout ?? "",
-        stderr: error.stderr ?? error.message,
-        exitCode: error.code ?? 1,
-        duration: Date.now() - startTime,
+        stdout: err.stdout ?? "",
+        stderr: err.stderr ?? err.message ?? "Unknown error",
+        exitCode: err.code ?? 1,
+        duration: Date.now() - start,
       }
-    }
-  }
-
-  async execTool(tool: string, args: string[], timeout?: number): Promise<DockerExecutionResult> {
-    const command = [tool, ...args].join(" ")
-    return this.exec(command, timeout)
-  }
-
-  /**
-   * Copy a file or directory from the Docker container to the host filesystem.
-   */
-  async copyFromContainer(
-    containerPath: string,
-    hostPath: string
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      await execAsync(
-        `docker cp ${this.containerName}:"${containerPath}" "${hostPath}"`,
-        { timeout: 30000 }
-      )
-      return { success: true }
-    } catch (error: any) {
-      return { success: false, error: error.message }
     }
   }
 
   async cleanup(): Promise<void> {
-    console.log(pc.cyan(`[DockerManager] Stopping container "${this.containerName}"...`))
-    try {
-      await execAsync(`docker rm -f ${this.containerName}`)
+    if (NATIVE_MODE) {
+      console.log(pc.red("[Shadow Core] Native Mode — no container to clean up"))
       this.containerRunning = false
-      console.log(pc.green(`[DockerManager] Container "${this.containerName}" removed`))
-    } catch (error) {
-      console.error(pc.red("[DockerManager] Cleanup failed:"), error)
-      this.containerRunning = false
+      return
     }
+    try {
+      await execAsync(`docker stop ${this.containerName} 2>/dev/null || true`)
+    } catch {
+      // ignore
+    }
+    this.containerRunning = false
   }
 
   isRunning(): boolean {
     return this.containerRunning
   }
 
+  isNativeMode(): boolean {
+    return NATIVE_MODE
+  }
+
   getContainerName(): string {
-    return this.containerName
+    return NATIVE_MODE ? "native-kali-host" : this.containerName
   }
 
   getImageName(): string {
-    return this.imageName
+    return NATIVE_MODE ? "kali-linux-native" : this.imageName
+  }
+
+  async copyFromContainer(containerPath: string, hostPath: string): Promise<DockerExecutionResult> {
+    const start = Date.now()
+    if (NATIVE_MODE) {
+      // في Native Mode — الملفات موجودة مباشرة على الـ host
+      try {
+        const { stdout, stderr } = await execAsync(`cp "${containerPath}" "${hostPath}" 2>&1 || true`)
+        return { success: true, stdout, stderr: stderr ?? "", exitCode: 0, duration: Date.now() - start }
+      } catch (e: unknown) {
+        const err = e as { message?: string }
+        return { success: false, stdout: "", stderr: err.message ?? "", exitCode: 1, duration: Date.now() - start }
+      }
+    }
+    try {
+      const { stdout, stderr } = await execAsync(
+        `docker cp ${this.containerName}:${containerPath} ${hostPath}`
+      )
+      return { success: true, stdout, stderr: stderr ?? "", exitCode: 0, duration: Date.now() - start }
+    } catch (e: unknown) {
+      const err = e as { message?: string }
+      return { success: false, stdout: "", stderr: err.message ?? "", exitCode: 1, duration: Date.now() - start }
+    }
   }
 }

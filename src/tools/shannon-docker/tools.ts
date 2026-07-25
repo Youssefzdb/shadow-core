@@ -145,7 +145,7 @@ Examples:
         ].join("\n")
       }
 
-      return `Failed to extract file: ${result.error}`
+      return `Failed to extract file: ${result.stderr}`
     },
   })
 }
