@@ -31,13 +31,13 @@ const SHIELD = [
 
 // ─── 7 Free Agents ───
 const AGENTS = [
-  { id: "shadow-mimo", name: "MiMo V2.5", color: "#FF6B35" },
-  { id: "shadow-pickle", name: "Big Pickle", color: "#7CB342" },
-  { id: "shadow-deepseek", name: "DeepSeek V4", color: "#42A5F5" },
-  { id: "shadow-laguna", name: "Laguna S 2.1", color: "#26C6DA" },
-  { id: "shadow-ling", name: "Ling 3.0", color: "#FFCA28" },
-  { id: "shadow-nemotron", name: "Nemotron 3", color: "#76B900" },
-  { id: "shadow-north", name: "North Mini", color: "#AB47BC" },
+  { id: "shadow-mimo", name: "MiMo V2.5", color: "#FF8800" },
+  { id: "shadow-pickle", name: "Big Pickle", color: "#00FF44" },
+  { id: "shadow-deepseek", name: "DeepSeek V4", color: "#3399FF" },
+  { id: "shadow-laguna", name: "Laguna S 2.1", color: "#00FFFF" },
+  { id: "shadow-ling", name: "Ling 3.0", color: "#FFDD00" },
+  { id: "shadow-nemotron", name: "Nemotron 3", color: "#88FF00" },
+  { id: "shadow-north", name: "North Mini", color: "#CC44FF" },
 ]
 
 // ─── Pentest Phases ───
@@ -67,7 +67,7 @@ function look(theme: any): Skin {
     primary: get("primary", "#CC0000"),
     secondary: get("secondary", "#8B0000"),
     text: get("text", "#E0E0E0"),
-    muted: get("textMuted", "#6A6A6A"),
+    muted: get("textMuted", "#A0A0A0"),
     border: get("border", "#333333"),
     panel: get("backgroundPanel", "#1A1A1A"),
     bg: get("background", "#0D0D0D"),
