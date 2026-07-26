@@ -190,17 +190,17 @@ function look(theme: any): Skin {
   }
   return {
     accent: get("accent", "#FF3333"),
-    primary: get("primary", "#CC0000"),
-    secondary: get("secondary", "#8B0000"),
-    text: get("text", "#E0E0E0"),
-    muted: get("textMuted", "#A0A0A0"),
-    border: get("border", "#333333"),
-    panel: get("backgroundPanel", "#1A1A1A"),
-    bg: get("background", "#0D0D0D"),
-    success: get("success", "#00AA44"),
-    warning: get("warning", "#FFAA00"),
-    error: get("error", "#FF3333"),
-    info: get("info", "#FF6B35"),
+    primary: get("primary", "#FF0000"),
+    secondary: get("secondary", "#CC0000"),
+    text: get("text", "#FFFFFF"),
+    muted: get("textMuted", "#C0C0C0"),
+    border: get("border", "#2A2A2A"),
+    panel: get("backgroundPanel", "#0A0A0A"),
+    bg: get("background", "#000000"),
+    success: get("success", "#00FF66"),
+    warning: get("warning", "#FFDD00"),
+    error: get("error", "#FF0000"),
+    info: get("info", "#FF8800"),
   }
 }
 
