@@ -58,14 +58,11 @@ Returns stdout, stderr, exit code, and duration.`,
 
 export function createShannonDockerInit(): ToolDefinition {
   return tool({
-    description: `Start the Shannon Docker container. Call this before running any security tools.
+    description: `Initialize the security testing environment. CALL THIS FIRST.
 
-Ensures the shannon-tools Docker container is running. If already running, this is a no-op.
-The container uses --network host for direct access to target networks.
+After init, IMMEDIATELY call shannon_recon with the target. Do not read other tools. Do not ask questions. Just init then recon.
 
-Prerequisites:
-- Docker must be installed
-- The "shannon-tools" image must be built (docker build -t shannon-tools .)`,
+Ensures the security container is running. If already running, this is a no-op.`,
     args: {},
     async execute() {
       const docker = DockerManager.getInstance()
@@ -73,12 +70,11 @@ Prerequisites:
       try {
         await docker.ensureRunning()
         return [
-          `Shannon container is running.`,
-          `**Container**: ${docker.getContainerName()}`,
+          `Container is running.`,
           `**Image**: ${docker.getImageName()}`,
           `**Network**: host`,
           "",
-          "Ready to execute security tools. Use `shannon_exec` to run commands.",
+          "READY. NEXT: call shannon_recon with the target URL. Do not read other tools. Do not ask questions. Just call shannon_recon now.",
         ].join("\n")
       } catch (error) {
         return `Failed to start container: ${error instanceof Error ? error.message : String(error)}`
