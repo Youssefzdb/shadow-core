@@ -21,38 +21,125 @@ echo -e "${RED}║   7 Free Models — No API Key Required          ║${RESET}"
 echo -e "${RED}╚═══════════════════════════════════════════════╝${RESET}"
 echo ""
 
-# ─── 1. Check opencode ───
+# ─── 1. Check / Install OpenCode ───
 echo -e "${YELLOW}[1/4]${RESET} Checking OpenCode..."
-if ! command -v opencode &>/dev/null; then
-    echo -e "  ${RED}Not found. Installing...${RESET}"
-    npm install -g opencode-ai
+
+# First check if opencode exists anywhere
+OPENCODE_FOUND=""
+for candidate in \
+    "$(command -v opencode 2>/dev/null)" \
+    "/usr/local/bin/opencode" \
+    "/usr/bin/opencode" \
+    "$HOME/.opencode/bin/opencode" \
+    "/root/.opencode/bin/opencode" \
+    "$HOME/.local/bin/opencode" \
+    "$HOME/.bun/bin/opencode"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+        OPENCODE_FOUND="$candidate"
+        break
+    fi
+done
+
+if [[ -n "$OPENCODE_FOUND" ]]; then
+    echo -e "  ${GREEN}✓${RESET} OpenCode found: $OPENCODE_FOUND"
+    # Ensure it's in PATH
+    if ! command -v opencode &>/dev/null; then
+        ln -sf "$OPENCODE_FOUND" /usr/local/bin/opencode 2>/dev/null || true
+        echo -e "  ${GREEN}✓${RESET} Symlinked to /usr/local/bin/opencode"
+    fi
 else
-    echo -e "  ${GREEN}✓${RESET} OpenCode $(opencode --version 2>&1)"
+    echo -e "  ${YELLOW}OpenCode not found. Installing...${RESET}"
+
+    # Method 1: Official curl installer (most reliable)
+    echo -e "  ${DIM}Trying official installer...${RESET}"
+    if curl -fsSL https://opencode.ai/install | bash 2>/dev/null; then
+        echo -e "  ${GREEN}✓${RESET} Installed via official installer"
+        # Source profile to get new PATH
+        export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"
+    else
+        echo -e "  ${YELLOW}Official installer failed. Trying npm...${RESET}"
+
+        # Fix npm glob issue first
+        npm cache clean --force 2>/dev/null || true
+        if npm install -g opencode-ai 2>/dev/null; then
+            echo -e "  ${GREEN}✓${RESET} Installed via npm"
+        else
+            echo -e "  ${YELLOW}npm failed. Trying bun...${RESET}"
+            if command -v bun &>/dev/null; then
+                bun install -g opencode-ai 2>/dev/null && \
+                    echo -e "  ${GREEN}✓${RESET} Installed via bun"
+            else
+                # Method 3: Direct binary download
+                echo -e "  ${YELLOW}Trying direct download...${RESET}"
+                ARCH=$(uname -m)
+                case "$ARCH" in
+                    x86_64|amd64) ARCH="x64" ;;
+                    aarch64|arm64) ARCH="arm64" ;;
+                    *) echo -e "  ${RED}Unsupported arch: $ARCH${RESET}"; exit 1 ;;
+                esac
+
+                mkdir -p "$HOME/.opencode/bin"
+                if curl -fsSL "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-${ARCH}" \
+                    -o "$HOME/.opencode/bin/opencode" 2>/dev/null; then
+                    chmod +x "$HOME/.opencode/bin/opencode"
+                    ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode 2>/dev/null || true
+                    export PATH="$HOME/.opencode/bin:$PATH"
+                    echo -e "  ${GREEN}✓${RESET} Installed via direct download"
+                else
+                    echo -e "  ${RED}All install methods failed!${RESET}"
+                    echo -e "  ${YELLOW}Install manually:${RESET}"
+                    echo -e "    curl -fsSL https://opencode.ai/install | bash"
+                    echo -e "  Then re-run this script."
+                    exit 1
+                fi
+            fi
+        fi
+    fi
 fi
+
+# Verify
+if ! command -v opencode &>/dev/null; then
+    # Try finding it again after install
+    for candidate in \
+        "$HOME/.opencode/bin/opencode" \
+        "/usr/local/bin/opencode" \
+        "$HOME/.local/bin/opencode"; do
+        if [[ -x "$candidate" ]]; then
+            ln -sf "$candidate" /usr/local/bin/opencode 2>/dev/null || true
+            export PATH="/usr/local/bin:$PATH"
+            break
+        fi
+    done
+fi
+
+OPENCODE_BIN="$(command -v opencode 2>/dev/null || echo '/usr/local/bin/opencode')"
+echo -e "  ${GREEN}✓${RESET} OpenCode: $OPENCODE_BIN ($($OPENCODE_BIN --version 2>&1 || echo 'unknown'))"
 
 # ─── 2. Install shadow wrapper globally ───
 echo -e "${YELLOW}[2/4]${RESET} Installing shadow command..."
 WRAPPER="$PROJECT_DIR/scripts-shadow/shadow-wrapper.sh"
 
-# Make executable
 chmod +x "$WRAPPER"
 
 # Symlink to /usr/local/bin
-if [[ -w /usr/local/bin ]]; then
-    ln -sf "$WRAPPER" /usr/local/bin/shadow
-else
+ln -sf "$WRAPPER" /usr/local/bin/shadow 2>/dev/null || \
     sudo ln -sf "$WRAPPER" /usr/local/bin/shadow 2>/dev/null || \
-    ln -sf "$WRAPPER" "$HOME/.local/bin/shadow" 2>/dev/null || \
-    echo -e "  ${YELLOW}Could not symlink. Add to PATH manually:${RESET} $WRAPPER"
-fi
+    (mkdir -p "$HOME/.local/bin" && ln -sf "$WRAPPER" "$HOME/.local/bin/shadow")
 
-echo -e "  ${GREEN}✓${RESET} shadow → $(command -v shadow 2>/dev/null || echo "$WRAPPER")"
+SHADOW_PATH="$(command -v shadow 2>/dev/null || echo "$WRAPPER")"
+echo -e "  ${GREEN}✓${RESET} shadow → $SHADOW_PATH"
 
 # ─── 3. Write OpenCode config ───
 echo -e "${YELLOW}[3/4]${RESET} Writing OpenCode config with 7 free models..."
 CONFIG_DIR="$HOME/.config/opencode"
 CONFIG_FILE="$CONFIG_DIR/opencode.jsonc"
 mkdir -p "$CONFIG_DIR"
+
+# Backup existing config
+if [[ -f "$CONFIG_FILE" && ! -f "$CONFIG_FILE.bak" ]]; then
+    cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
+    echo -e "  ${DIM}Backed up existing config to $CONFIG_FILE.bak${RESET}"
+fi
 
 cat > "$CONFIG_FILE" << 'CONFIG_EOF'
 {
@@ -134,34 +221,35 @@ CONFIG_EOF
 
 echo -e "  ${GREEN}✓${RESET} Config → $CONFIG_FILE"
 
-# ─── 4. Install Shannon plugin ───
+# ─── 4. Register Shannon plugin ───
 echo -e "${YELLOW}[4/4]${RESET} Registering Shannon plugin..."
 
-# Add plugin path to config (merge safely)
+# Try to build the plugin first
+if command -v bun &>/dev/null && [[ -f "$PROJECT_DIR/package.json" ]]; then
+    cd "$PROJECT_DIR"
+    bun install 2>/dev/null && bun run build 2>/dev/null && \
+        echo -e "  ${GREEN}✓${RESET} Plugin built" || \
+        echo -e "  ${YELLOW}Plugin build skipped (non-critical)${RESET}"
+fi
+
+# Add plugin path to config
 python3 -c "
 import json, re, sys
-
 config_path = '$CONFIG_FILE'
 with open(config_path, 'r') as f:
     content = f.read()
-
-# Simple JSONC parse: strip comments
-content_clean = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
+content_clean = re.sub(r'//.*?\$', '', content, flags=re.MULTILINE)
 config = json.loads(content_clean)
-
-# Add plugin
 plugin_path = '$PROJECT_DIR/src/index.ts'
 if 'plugin' not in config:
     config['plugin'] = [plugin_path]
 elif plugin_path not in config['plugin']:
     config['plugin'].append(plugin_path)
-
-# Write back as JSON (clean)
 with open(config_path, 'w') as f:
     json.dump(config, f, indent=2)
     f.write('\n')
 print('  Plugin registered')
-" 2>/dev/null || echo -e "  ${YELLOW}Plugin registration skipped (manual add needed)${RESET}"
+" 2>/dev/null || echo -e "  ${YELLOW}Plugin registration skipped${RESET}"
 
 echo -e "  ${GREEN}✓${RESET} Shannon plugin registered"
 
@@ -173,7 +261,7 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "  ${YELLOW}Type 'shadow' to launch${RESET}"
 echo ""
-echo -e "  ${DIM}7 Free Agents:${RESET}"
+echo -e "  ${DIM}7 Free Agents (switch with Tab):${RESET}"
 echo -e "    shadow-mimo      MiMo V2.5 (Xiaomi flagship)"
 echo -e "    shadow-pickle    Big Pickle (stealth frontier)"
 echo -e "    shadow-deepseek  DeepSeek V4 Flash"
@@ -181,6 +269,4 @@ echo -e "    shadow-laguna    Laguna S 2.1"
 echo -e "    shadow-ling      Ling 3.0 Flash"
 echo -e "    shadow-nemotron  NVIDIA Nemotron 3 Ultra"
 echo -e "    shadow-north     North Mini Code"
-echo ""
-echo -e "  ${DIM}Switch agents with Tab key inside TUI${RESET}"
 echo ""
