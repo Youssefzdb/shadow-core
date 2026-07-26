@@ -125,7 +125,7 @@ const ShannonPlugin: Plugin = async (ctx: PluginInput) => {
       await sessionManager.event?.(input)
     },
     "experimental.chat.system.transform": async (_input, output) => {
-      output.system.push(SHANNON_SYSTEM_PROMPT)
+      output.system.unshift(SHANNON_SYSTEM_PROMPT)  // Prepend — our prompt must be FIRST
     },
   }
 }
