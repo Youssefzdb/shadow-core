@@ -40,11 +40,10 @@ install_go() {
 }
 
 if command -v go &>/dev/null; then
-    # نتحقق إنه يشتغل فعلاً (مش Illegal instruction)
     if go version &>/dev/null 2>&1; then
         echo -e "${RED}[Shadow Core]${RESET} Go already installed: $(go version)"
     else
-        echo -e "${RED}[Shadow Core]${RESET} Existing Go is incompatible (Illegal instruction) — reinstalling..."
+        echo -e "${RED}[Shadow Core]${RESET} Existing Go is incompatible — reinstalling..."
         install_go
     fi
 else
@@ -53,14 +52,10 @@ fi
 
 export PATH=$PATH:/usr/local/go/bin
 
-# تحقق نهائي
 if ! go version &>/dev/null 2>&1; then
-    echo -e "${RED}[Shadow Core]${RESET} ERROR: Go still not working. Trying GOAMD64=v1 workaround..."
-    # نجرب v1 compatibility level
     export GOAMD64=v1
     if ! go version &>/dev/null 2>&1; then
         echo -e "${RED}[Shadow Core]${RESET} FATAL: Cannot run Go on this system."
-        echo "Try running: apt-get install -y golang-go"
         exit 1
     fi
 fi
@@ -77,13 +72,11 @@ cd opencode-v1
 # ────────── 4. تطبيق Shadow Core patches ──────────
 echo -e "${RED}[Shadow Core]${RESET} Applying Shadow Core patches..."
 
-# --- Patch 1: icons.go ---
 cat > /tmp/opencode-v1/internal/tui/styles/icons.go << 'GOEOF'
 package styles
 
 const (
 	OpenCodeIcon string = "🔴"
-
 	CheckIcon    string = "✓"
 	ErrorIcon    string = "✖"
 	WarningIcon  string = "⚠"
@@ -95,7 +88,6 @@ const (
 )
 GOEOF
 
-# --- Patch 2: chat.go ---
 cat > /tmp/opencode-v1/internal/tui/components/chat/chat.go << 'GOEOF'
 package chat
 
@@ -119,130 +111,61 @@ type SendMsg struct {
 }
 
 type SessionSelectedMsg = session.Session
-
 type SessionClearedMsg struct{}
-
 type EditorFocusMsg bool
 
 func header(width int) string {
-	return lipgloss.JoinVertical(
-		lipgloss.Top,
-		logo(width),
-		repo(width),
-		"",
-		cwd(width),
-	)
+	return lipgloss.JoinVertical(lipgloss.Top, logo(width), repo(width), "", cwd(width))
 }
 
 func lspsConfigured(width int) string {
 	cfg := config.Get()
-	title := "LSP Configuration"
-	title = ansi.Truncate(title, width, "…")
-
+	title := ansi.Truncate("LSP Configuration", width, "…")
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
-
-	lsps := baseStyle.
-		Width(width).
-		Foreground(t.Primary()).
-		Bold(true).
-		Render(title)
-
+	lsps := baseStyle.Width(width).Foreground(t.Primary()).Bold(true).Render(title)
 	var lspNames []string
 	for name := range cfg.LSP {
 		lspNames = append(lspNames, name)
 	}
 	sort.Strings(lspNames)
-
 	var lspViews []string
 	for _, name := range lspNames {
 		lsp := cfg.LSP[name]
-		lspName := baseStyle.
-			Foreground(t.Text()).
-			Render(fmt.Sprintf("• %s", name))
-
-		cmd := lsp.Command
-		cmd = ansi.Truncate(cmd, width-lipgloss.Width(lspName)-3, "…")
-
-		lspPath := baseStyle.
-			Foreground(t.TextMuted()).
-			Render(fmt.Sprintf(" (%s)", cmd))
-
-		lspViews = append(lspViews,
-			baseStyle.
-				Width(width).
-				Render(
-					lipgloss.JoinHorizontal(
-						lipgloss.Left,
-						lspName,
-						lspPath,
-					),
-				),
-		)
+		lspName := baseStyle.Foreground(t.Text()).Render(fmt.Sprintf("• %s", name))
+		cmd := ansi.Truncate(lsp.Command, width-lipgloss.Width(lspName)-3, "…")
+		lspPath := baseStyle.Foreground(t.TextMuted()).Render(fmt.Sprintf(" (%s)", cmd))
+		lspViews = append(lspViews, baseStyle.Width(width).Render(lipgloss.JoinHorizontal(lipgloss.Left, lspName, lspPath)))
 	}
-
-	return baseStyle.
-		Width(width).
-		Render(
-			lipgloss.JoinVertical(
-				lipgloss.Left,
-				lsps,
-				lipgloss.JoinVertical(
-					lipgloss.Left,
-					lspViews...,
-				),
-			),
-		)
+	return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lsps, lipgloss.JoinVertical(lipgloss.Left, lspViews...)))
 }
 
 func logo(width int) string {
-	logo := fmt.Sprintf("%s %s", styles.OpenCodeIcon, "Shadow Core")
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
-
-	versionText := baseStyle.
-		Foreground(t.TextMuted()).
-		Render(version.Version)
-
-	return baseStyle.
-		Bold(true).
-		Width(width).
-		Render(
-			lipgloss.JoinHorizontal(
-				lipgloss.Left,
-				logo,
-				" ",
-				versionText,
-			),
-		)
+	versionText := baseStyle.Foreground(t.TextMuted()).Render(version.Version)
+	return baseStyle.Bold(true).Width(width).Render(
+		lipgloss.JoinHorizontal(lipgloss.Left, styles.OpenCodeIcon+" Shadow Core", " ", versionText),
+	)
 }
 
 func repo(width int) string {
-	repo := "Shadow Core — Autonomous Penetration Testing Engine"
-	t := theme.CurrentTheme()
-
-	return styles.BaseStyle().
-		Foreground(t.TextMuted()).
-		Width(width).
-		Render(repo)
+	return styles.BaseStyle().Foreground(theme.CurrentTheme().TextMuted()).Width(width).Render(
+		"Shadow Core — Autonomous Penetration Testing Engine",
+	)
 }
 
 func cwd(width int) string {
-	cwd := fmt.Sprintf("cwd: %s", config.WorkingDirectory())
-	t := theme.CurrentTheme()
-
-	return styles.BaseStyle().
-		Foreground(t.TextMuted()).
-		Width(width).
-		Render(cwd)
+	return styles.BaseStyle().Foreground(theme.CurrentTheme().TextMuted()).Width(width).Render(
+		fmt.Sprintf("cwd: %s", config.WorkingDirectory()),
+	)
 }
 GOEOF
 
 # ────────── 5. البناء ──────────
-echo -e "${RED}[Shadow Core]${RESET} Building binary (this may take ~2-3 min)..."
+echo -e "${RED}[Shadow Core]${RESET} Building binary (~2-3 min)..."
 mkdir -p /root/.opencode/bin
 
-# GOAMD64=v1 لضمان التوافق مع أي CPU x86_64
 GOAMD64=v1 go build \
     -ldflags="-s -w -X github.com/opencode-ai/opencode/internal/version.Version=shadow-core-1.18.5" \
     -o /root/.opencode/bin/opencode \
@@ -250,7 +173,59 @@ GOAMD64=v1 go build \
 
 chmod +x /root/.opencode/bin/opencode
 
-# ────────── 6. تثبيت الـ wrapper ──────────
+# ────────── 6. تثبيت mock server ──────────
+echo -e "${RED}[Shadow Core]${RESET} Installing mock server..."
+
+mkdir -p /usr/local/lib
+
+cat > /usr/local/lib/shadow-mock-server.py << 'PYEOF'
+#!/usr/bin/env python3
+"""Shadow Core Mock Server — OpenAI-compatible, no key needed"""
+import json, sys
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+PORT = 4444
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def do_GET(self):
+        if self.path == "/v1/models":
+            self.send_response(200)
+            self.send_header("Content-Type","application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"object":"list","data":[{
+                "id":"shadow-core","object":"model","type":"llm",
+                "max_context_length":128000,"loaded_context_length":128000
+            }]}).encode())
+        else:
+            self.send_response(404); self.end_headers()
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length",0))
+        if n: self.rfile.read(n)
+        if "/chat/completions" in self.path:
+            self.send_response(200)
+            self.send_header("Content-Type","text/event-stream")
+            self.send_header("Cache-Control","no-cache")
+            self.end_headers()
+            msg = "⚠️  لم يتم تكوين AI provider. أضف API key ثم أعد تشغيل shadow."
+            chunk = {"id":"sc-1","object":"chat.completion.chunk","model":"shadow-core",
+                     "choices":[{"index":0,"delta":{"role":"assistant","content":msg},"finish_reason":None}]}
+            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            done = {"id":"sc-1","object":"chat.completion.chunk","model":"shadow-core",
+                    "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+            self.wfile.write(f"data: {json.dumps(done)}\n\ndata: [DONE]\n\n".encode())
+        else:
+            self.send_response(404); self.end_headers()
+
+if __name__=="__main__":
+    HTTPServer(("127.0.0.1", PORT), H).serve_forever()
+PYEOF
+
+chmod +x /usr/local/lib/shadow-mock-server.py
+
+# ────────── 7. تثبيت shadow wrapper ──────────
 echo -e "${RED}[Shadow Core]${RESET} Installing 'shadow' command..."
 
 cat > /usr/local/bin/shadow << 'BASHEOF'
@@ -258,18 +233,67 @@ cat > /usr/local/bin/shadow << 'BASHEOF'
 RED='\033[1;31m'
 RESET='\033[0m'
 DIM='\033[2m'
+YELLOW='\033[1;33m'
+MOCK_PORT=4444
+MOCK_PID_FILE="/tmp/.shadow-mock.pid"
+CONFIG_FILE="$HOME/.opencode.json"
 
 if [[ "$1" == "--version" || "$1" == "-v" ]]; then
     echo -e "${RED}Shadow Core${RESET} v1.0 ${DIM}(shadow-core-1.18.5)${RESET} \033[0;31m[Kali Native]\033[0m"
     exit 0
 fi
 
-exec /root/.opencode/bin/opencode "$@"
+has_real_provider() {
+    [[ -n "$ANTHROPIC_API_KEY" ]] && return 0
+    [[ -n "$OPENAI_API_KEY" ]] && return 0
+    [[ -n "$GEMINI_API_KEY" ]] && return 0
+    [[ -n "$GROQ_API_KEY" ]] && return 0
+    [[ -n "$OPENROUTER_API_KEY" ]] && return 0
+    [[ -n "$LOCAL_ENDPOINT" ]] && return 0
+    for f in "$HOME/.config/github-copilot/hosts.json" "$HOME/.config/github-copilot/apps.json"; do
+        [[ -f "$f" ]] && grep -q "oauth_token" "$f" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+start_mock() {
+    [[ -f "$MOCK_PID_FILE" ]] && kill "$(cat "$MOCK_PID_FILE")" 2>/dev/null; rm -f "$MOCK_PID_FILE"
+    python3 /usr/local/lib/shadow-mock-server.py &
+    echo $! > "$MOCK_PID_FILE"
+    sleep 0.4
+    cat > "$CONFIG_FILE" << 'JSON'
+{
+  "providers": { "local": { "apiKey": "shadow-core-mock" } },
+  "agents": {
+    "coder":      { "model": "local.shadow-core", "maxTokens": 4096 },
+    "summarizer": { "model": "local.shadow-core", "maxTokens": 2048 },
+    "task":       { "model": "local.shadow-core", "maxTokens": 2048 },
+    "title":      { "model": "local.shadow-core", "maxTokens": 80   }
+  }
+}
+JSON
+    echo -e "${YELLOW}[Shadow Core]${RESET} ${DIM}Mock Mode${RESET} — no AI provider configured"
+    echo -e "${YELLOW}[Shadow Core]${RESET} Add a key anytime: ${RED}export GEMINI_API_KEY=... && shadow${RESET}"
+    echo ""
+}
+
+cleanup() {
+    [[ -f "$MOCK_PID_FILE" ]] && kill "$(cat "$MOCK_PID_FILE")" 2>/dev/null; rm -f "$MOCK_PID_FILE"
+}
+trap cleanup EXIT
+
+if has_real_provider; then
+    exec /root/.opencode/bin/opencode "$@"
+else
+    export LOCAL_ENDPOINT="http://127.0.0.1:$MOCK_PORT"
+    start_mock
+    /root/.opencode/bin/opencode "$@"
+fi
 BASHEOF
 
 chmod +x /usr/local/bin/shadow
 
-# ────────── 7. تنظيف ──────────
+# ────────── 8. تنظيف ──────────
 rm -rf /tmp/opencode-v1
 
 echo ""
@@ -277,6 +301,7 @@ echo -e "${RED}╔════════════════════�
 echo -e "${RED}║   Shadow Core installed successfully!   ║${RESET}"
 echo -e "${RED}╚══════════════════════════════════════════╝${RESET}"
 echo ""
-echo -e "  Run:     ${RED}shadow${RESET}"
-echo -e "  Version: $(shadow --version)"
+echo -e "  ${RED}shadow${RESET}              — launch (any mode)"
+echo -e "  ${RED}shadow --version${RESET}    — show version"
 echo ""
+shadow --version
