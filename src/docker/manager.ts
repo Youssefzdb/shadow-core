@@ -96,14 +96,25 @@ export class DockerManager {
     try {
       await this.ensureRunning()
 
+      // Tor proxy injection — wrap HTTP commands through SOCKS proxy
+      let torCommand = command
+      const torEnabled = process.env.SHADOW_TOR === "true" || process.env.SHADOW_TOR === "1"
+      if (torEnabled) {
+        // Replace curl/wget with torsocks-wrapped versions
+        if (/\bcurl\b/.test(torCommand) || /\bwget\b/.test(torCommand) || /\bnmap\b/.test(torCommand) || /\bnikto\b/.test(torCommand) || /\bwhatweb\b/.test(torCommand) || /\bgobuster\b/.test(torCommand)) {
+          // Use torsocks to wrap the entire command
+          torCommand = `torsocks -i -P 9050 ${torCommand} 2>/dev/null || ${torCommand}`
+        }
+      }
+
       let fullCommand: string
 
       if (NATIVE_MODE) {
         // Execute directly on the host (Kali Native)
-        fullCommand = command
+        fullCommand = torCommand
       } else {
         // Execute inside Docker container
-        const escaped = command.replace(/'/g, `'\\''`)
+        const escaped = torCommand.replace(/'/g, `'\\''`)
         fullCommand = `docker exec ${this.containerName} sh -c '${escaped}'`
       }
 

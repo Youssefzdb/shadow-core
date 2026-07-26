@@ -1,1 +1,0 @@
-export { createShannonSubdomainTakeover } from "./tools"

@@ -71,6 +71,9 @@ type FeedState = {
   low: number
   events: FeedEvent[]
   running: boolean
+  torIP: string
+  torActive: boolean
+  memoryCount: number
 }
 
 const [feedState, setFeedState] = createSignal<FeedState>({
@@ -85,6 +88,9 @@ const [feedState, setFeedState] = createSignal<FeedState>({
   low: 0,
   events: [{ time: "--:--:--", phase: "IDLE", action: "Awaiting target", result: "...", level: "info" }],
   running: false,
+  torIP: "OFF",
+  torActive: false,
+  memoryCount: 0,
 })
 
 function feedColor(level: string, skin: Skin): string {
@@ -362,6 +368,10 @@ function appBottomSlot(ctx: any): JSX.Element {
         <text fg={s.bg}>Target: <b>{state.target}</b></text>
         <text fg={s.bg}>|</text>
         <text fg={s.bg}>Findings: <b>{state.findings}</b></text>
+        <text fg={s.bg}>|</text>
+        <text fg={s.bg}>Tor: <b>{state.torActive ? state.torIP : "OFF"}</b></text>
+        <text fg={s.bg}>|</text>
+        <text fg={s.bg}>Mem: <b>{state.memoryCount}</b></text>
       </box>
       <text fg={s.bg}>{state.running ? "● RUNNING" : "○ READY"} | 7 Free Models | Kali Native</text>
     </box>
@@ -652,7 +662,7 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
       <box width="100%" flexDirection="row" justifyContent="space-between"
         backgroundColor={s.accent} paddingLeft={1} paddingRight={1}>
         <text fg={s.bg}><b>SHADOW CORE</b></text>
-        <text fg={s.bg}>Agent: {feedState().agent} | Phase: {feedState().phase} | Target: {feedState().target} | Findings: {feedState().findings}</text>
+        <text fg={s.bg}>Agent: {feedState().agent} | Phase: {feedState().phase} | Target: {feedState().target} | Findings: {feedState().findings} | Tor: {feedState().torActive ? feedState().torIP : "OFF"} | Mem: {feedState().memoryCount}</text>
       </box>
     </box>
   )
@@ -724,7 +734,26 @@ const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginM
           let phase = prev.phase
           let phaseIndex = prev.phaseIndex
           
+          let torIP = prev.torIP
+          let torActive = prev.torActive
+          let memoryCount = prev.memoryCount
+
           for (const evt of newEvents) {
+            // Detect Tor events
+            if (evt.phase === "TOR") {
+              if (evt.action.includes("tor-start") || evt.action.includes("ip-rotate")) {
+                torActive = true
+                const ipMatch = evt.result.match(/IP:\s*(.+)/)
+                if (ipMatch) torIP = ipMatch[1]
+              } else if (evt.action.includes("tor-stop")) {
+                torActive = false
+                torIP = "OFF"
+              }
+            }
+            // Detect Memory events
+            if (evt.phase === "MEMORY") {
+              if (evt.action.includes("save")) memoryCount++
+            }
             if (evt.result.toLowerCase().includes("finding") || evt.result.toLowerCase().includes("vulnerab") || evt.result.toLowerCase().includes("found")) {
               findings++
               if (evt.level === "error") critical++
@@ -741,7 +770,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginM
             }
           }
           
-          return { ...prev, events: allEvents, findings, critical, high, medium, low, phase, phaseIndex, running: true }
+          return { ...prev, events: allEvents, findings, critical, high, medium, low, phase, phaseIndex, running: true, torIP, torActive, memoryCount }
         })
       }
     } catch {}
