@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { useTerminalDimensions, type JSX } from "@opentui/solid"
+import { createSignal, createMemo, onMount, onCleanup } from "solid-js"
 import { useBindings, useKeymapSelector } from "@opentui/keymap/solid"
 import { RGBA, VignetteEffect, type KeyEvent, type Renderable } from "@opentui/core"
 import { createBindingLookup, type BindingConfig } from "@opentui/keymap/extras"
@@ -43,10 +44,135 @@ const AGENTS = [
 // ─── Pentest Phases ───
 const PHASES = ["Recon", "Discovery", "Browser", "IDOR", "Exploit", "Report"]
 
-// ─── Mock Pentest Feed Events ───
-const FEED_EVENTS = [
-  { time: "--:--:--", event: "Awaiting target...", color: "muted" },
-]
+// ════════════════════════════════════════════════════════════
+// LIVE FEED SYSTEM — Reactive, updates from session messages
+// ════════════════════════════════════════════════════════════
+
+type FeedEvent = {
+  time: string
+  phase: string
+  action: string
+  result: string
+  level: "info" | "success" | "warning" | "error"
+}
+
+type FeedState = {
+  target: string
+  phase: string
+  phaseIndex: number
+  agent: string
+  findings: number
+  critical: number
+  high: number
+  medium: number
+  low: number
+  events: FeedEvent[]
+  running: boolean
+}
+
+// Global reactive feed state — shared across all slot renders
+const [feedState, setFeedState] = createSignal<FeedState>({
+  target: "Not set",
+  phase: "Idle",
+  phaseIndex: -1,
+  agent: "shadow-mimo",
+  findings: 0,
+  critical: 0,
+  high: 0,
+  medium: 0,
+  low: 0,
+  events: [{ time: "--:--:--", phase: "IDLE", action: "Awaiting target", result: "...", level: "info" }],
+  running: false,
+})
+
+// Feed event colors
+function feedColor(level: string, skin: Skin): string {
+  switch (level) {
+    case "success": return skin.success
+    case "warning": return skin.warning
+    case "error": return skin.error
+    default: return skin.info
+  }
+}
+
+// Parse [FEED] lines from message output
+function parseFeedLine(line: string): FeedEvent | null {
+  const match = line.match(/\[FEED\]\s*(\d{2}:\d{2}:\d{2})\s*\|\s*(\w+)\s*\|\s*(.+?)\s*\|\s*(.+)/)
+  if (!match) return null
+  const [, time, phase, action, result] = match
+  let level: FeedEvent["level"] = "info"
+  const lower = (action + " " + result).toLowerCase()
+  if (lower.includes("vulnerab") || lower.includes("found") || lower.includes("extracted") || lower.includes("compromise")) level = "success"
+  else if (lower.includes("error") || lower.includes("fail") || lower.includes("critical")) level = "error"
+  else if (lower.includes("warning") || lower.includes("suspicious")) level = "warning"
+  return { time, phase: phase.toUpperCase(), action, result, level }
+}
+
+// Update feed from message content
+function updateFeedFromMessage(content: string) {
+  const lines = content.split("\n")
+  const feedLines = lines.filter(l => l.includes("[FEED]"))
+  if (feedLines.length === 0) return
+
+  const newEvents: FeedEvent[] = []
+  for (const line of feedLines) {
+    const event = parseFeedLine(line)
+    if (event) newEvents.push(event)
+  }
+  if (newEvents.length === 0) return
+
+  setFeedState(prev => {
+    const allEvents = [...prev.events, ...newEvents].slice(-15) // Keep last 15
+    let findings = prev.findings
+    let critical = prev.critical
+    let high = prev.high
+    let medium = prev.medium
+    let low = prev.low
+    let phase = prev.phase
+    let phaseIndex = prev.phaseIndex
+
+    for (const evt of newEvents) {
+      if (evt.result.toLowerCase().includes("found") || evt.result.toLowerCase().includes("vulnerab")) {
+        findings++
+        if (evt.level === "error") critical++
+        else if (evt.level === "warning") high++
+        else if (evt.level === "success") medium++
+        else low++
+      }
+      // Update phase
+      const phaseMap: Record<string, number> = {
+        RECON: 0, DISCOVERY: 1, BROWSER: 2, IDOR: 3, EXPLOIT: 4, REPORT: 5
+      }
+      if (phaseMap[evt.phase] !== undefined) {
+        phaseIndex = phaseMap[evt.phase]
+        phase = PHASES[phaseIndex]
+      }
+    }
+
+    return { ...prev, events: allEvents, findings, critical, high, medium, low, phase, phaseIndex, running: true }
+  })
+}
+
+// Auto-generate feed ticks when running (simulated activity)
+let tickInterval: any = null
+function startFeedTicker() {
+  if (tickInterval) return
+  tickInterval = setInterval(() => {
+    setFeedState(prev => {
+      if (!prev.running) return prev
+      const now = new Date()
+      const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`
+      const tickEvents: FeedEvent[] = [
+        { time, phase: prev.phase.toUpperCase(), action: "scanning", result: "in progress...", level: "info" },
+      ]
+      return { ...prev, events: [...prev.events, ...tickEvents].slice(-15) }
+    })
+  }, 30000) // Every 30 seconds
+}
+
+function stopFeedTicker() {
+  if (tickInterval) { clearInterval(tickInterval); tickInterval = null }
+}
 
 // ─── Skin helper ───
 type Skin = {
@@ -154,6 +280,7 @@ function homeBottomSlot(ctx: any): JSX.Element {
 // ════════════════════════════════════════════════════════════
 function homeFooterSlot(ctx: any): JSX.Element {
   const s = look(ctx.theme?.current)
+  const state = feedState()
   return (
     <box
       width="100%"
@@ -164,7 +291,7 @@ function homeFooterSlot(ctx: any): JSX.Element {
       paddingRight={1}
     >
       <text fg={s.bg}><b>SHADOW CORE</b></text>
-      <text fg={s.bg}>Agent: <b>shadow-mimo</b> | Phase: Idle | Target: Not set | Findings: 0</text>
+      <text fg={s.bg}>Agent: {state.agent} | Phase: {state.phase} | Target: {state.target} | Findings: {state.findings}</text>
     </box>
   )
 }
@@ -174,6 +301,7 @@ function homeFooterSlot(ctx: any): JSX.Element {
 // ════════════════════════════════════════════════════════════
 function appBottomSlot(ctx: any): JSX.Element {
   const s = look(ctx.theme?.current)
+  const state = feedState()
   return (
     <box
       width="100%"
@@ -187,15 +315,15 @@ function appBottomSlot(ctx: any): JSX.Element {
       <box flexDirection="row" gap={2}>
         <text fg={s.bg}><b>SHADOW CORE</b></text>
         <text fg={s.bg}>|</text>
-        <text fg={s.bg}>Agent: <b>shadow-mimo</b></text>
+        <text fg={s.bg}>Agent: <b>{state.agent}</b></text>
         <text fg={s.bg}>|</text>
-        <text fg={s.bg}>Phase: Recon</text>
+        <text fg={s.bg}>Phase: <b>{state.phase}</b></text>
         <text fg={s.bg}>|</text>
-        <text fg={s.bg}>Target: <b>Not set</b></text>
+        <text fg={s.bg}>Target: <b>{state.target}</b></text>
         <text fg={s.bg}>|</text>
-        <text fg={s.bg}>Findings: 0</text>
+        <text fg={s.bg}>Findings: <b>{state.findings}</b></text>
       </box>
-      <text fg={s.bg}>7 Free Models ● Kali Native</text>
+      <text fg={s.bg}>{state.running ? "● RUNNING" : "○ READY"} | 7 Free Models | Kali Native</text>
     </box>
   )
 }
@@ -219,6 +347,8 @@ function sidebarTitleSlot(ctx: any, value: any): JSX.Element {
 function sidebarFeedSlot(ctx: any, value: any): JSX.Element {
   const s = look(ctx.theme?.current)
   const sid = value?.session_id ? String(value.session_id).slice(0, 8) : "--------"
+  const state = feedState()
+  const events = state.events.slice(-8) // Show last 8 in sidebar
   return (
     <box
       border
@@ -231,12 +361,24 @@ function sidebarFeedSlot(ctx: any, value: any): JSX.Element {
       flexDirection="column"
       gap={0}
     >
-      <text fg={s.warning}><b>▰ PENTEST FEED ▰</b></text>
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={s.warning}><b>▰ PENTEST FEED ▰</b></text>
+        <text fg={state.running ? s.success : s.muted}>{state.running ? "● LIVE" : "○ IDLE"}</text>
+      </box>
       <text fg={s.border}> ────────────────────</text>
       <text fg={s.muted}> </text>
-      <text fg={s.muted}>[--:--:--] Awaiting target...</text>
+      {events.map((evt) => (
+        <box flexDirection="row" gap={1}>
+          <text fg={s.muted}>[{evt.time}]</text>
+          <text fg={feedColor(evt.level, s)}>{evt.phase}</text>
+          <text fg={s.text}>{evt.action}</text>
+        </box>
+      ))}
       <text fg={s.muted}> </text>
       <text fg={s.border}> ────────────────────</text>
+      <text fg={s.muted}> Target: <span style={{ fg: s.warning }}>{state.target}</span></text>
+      <text fg={s.muted}> Phase: <span style={{ fg: s.accent }}>{state.phase}</span></text>
+      <text fg={s.muted}> Findings: <span style={{ fg: s.error }}>{state.findings}</span></text>
       <text fg={s.muted}> Session: {sid}</text>
     </box>
   )
@@ -421,11 +563,11 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
           <text fg={s.text}> Loop:   <span style={{ fg: s.info }}>Infinite</span></text>
           <text fg={s.border}>────────────────────</text>
           <text fg={s.accent}><b>FINDINGS</b></text>
-          <text fg={s.error}>  Critical:  0</text>
-          <text fg={s.warning}>  High:      0</text>
-          <text fg={s.info}>  Medium:    0</text>
-          <text fg={s.success}>  Low:       0</text>
-          <text fg={s.muted}>  Info:      0</text>
+          <text fg={s.error}>  Critical:  {feedState().critical}</text>
+          <text fg={s.warning}>  High:      {feedState().high}</text>
+          <text fg={s.info}>  Medium:    {feedState().medium}</text>
+          <text fg={s.success}>  Low:       {feedState().low}</text>
+          <text fg={s.muted}>  Info:      {feedState().findings - feedState().critical - feedState().high - feedState().medium - feedState().low}</text>
         </box>
 
         {/* Right: Shield + Commands */}
@@ -460,7 +602,7 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
       <box width="100%" flexDirection="row" justifyContent="space-between"
         backgroundColor={s.accent} paddingLeft={1} paddingRight={1}>
         <text fg={s.bg}><b>SHADOW CORE</b></text>
-        <text fg={s.bg}>Agent: shadow-mimo | Phase: Idle | Target: Not set | Findings: 0</text>
+        <text fg={s.bg}>Agent: {feedState().agent} | Phase: {feedState().phase} | Target: {feedState().target} | Findings: {feedState().findings}</text>
       </box>
     </box>
   )
@@ -481,6 +623,33 @@ const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginM
   const post = fx.apply.bind(fx)
   api.renderer.addPostProcessFn(post)
   api.lifecycle.onDispose(() => { api.renderer.removePostProcessFn(post) })
+
+  // 2b. Listen to session messages for live feed updates
+  const eventBus = (api as any).event
+  if (eventBus?.on) {
+    const unsubMessage = eventBus.on("message.part", (event: any) => {
+      try {
+        const text = event?.properties?.text || event?.text || ""
+        if (typeof text === "string" && text.includes("[FEED]")) {
+          updateFeedFromMessage(text)
+        }
+        // Auto-detect target from first user message
+        if (event?.type === "message.updated" || event?.properties?.type === "message.updated") {
+          const content = JSON.stringify(event)
+          const targetMatch = content.match(/(?:target|objectif|scope)[:\s]+(.+?)[\n\r"']/i)
+          if (targetMatch) {
+            setFeedState(prev => ({ ...prev, target: targetMatch[1].trim().slice(0, 40), running: true }))
+            startFeedTicker()
+          }
+        }
+      } catch {}
+    })
+    api.lifecycle.onDispose(() => { unsubMessage?.(); stopFeedTicker() })
+  } else {
+    // Fallback: start ticker anyway for visual feedback
+    startFeedTicker()
+    api.lifecycle.onDispose(() => stopFeedTicker())
+  }
 
   // 3. Dashboard route
   api.route.register([{
