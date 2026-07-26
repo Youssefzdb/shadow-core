@@ -29,6 +29,7 @@ import {
   createShannonSessionManagerHook,
 } from "./hooks"
 import { SHANNON_SYSTEM_PROMPT } from "./system-prompt"
+import { writeFeedLine, setFeedTarget, clearFeed } from "./hooks/shannon-progress-tracker/feed-writer"
 
 const KNOWN_SERVICE_PATTERN =
   /(?:Apache|Nginx|PHP|MySQL|MariaDB|OpenSSH|jQuery|Node\.js|Python|Ruby|Tomcat|IIS|WordPress|Drupal|Joomla|phpMyAdmin|GitLab|Jenkins|Grafana|Redis|MongoDB|PostgreSQL|Elasticsearch|RabbitMQ|Consul|Vault|MinIO|Keycloak|Strapi|Moodle|Express|Flask|Django|Spring|Rails|Laravel|Angular|React|Vue|Mailman|OJS|pgAdmin|CloudPanel|Portainer|Traefik|HAProxy)\/\d+\.\d+(\.\d+)?/gi
@@ -124,8 +125,27 @@ const ShannonPlugin: Plugin = async (ctx: PluginInput) => {
       await progressTracker.event?.(input)
       await sessionManager.event?.(input)
     },
-    "experimental.chat.system.transform": async (_input, output) => {
+    "experimental.chat.system.transform": async (input: any, output) => {
       output.system.unshift(SHANNON_SYSTEM_PROMPT)  // Prepend — our prompt must be FIRST
+
+      // Detect target from user message and write to feed file
+      try {
+        const userText = input?.info?.messages?.find((m: any) => m.role === "user")?.content || ""
+        const text = typeof userText === "string" ? userText : JSON.stringify(userText)
+        
+        // URL detection
+        const urlMatch = text.match(/https?:\/\/[^\s"'<>#]+/i)
+        if (urlMatch) {
+          setFeedTarget(urlMatch[0].slice(0, 50))
+        } else {
+          const ipMatch = text.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/)
+          if (ipMatch) setFeedTarget(ipMatch[0])
+          else {
+            const domainMatch = text.match(/\b[a-z0-9][-a-z0-9]*\.[a-z]{2,}(?:\.[a-z]{2,})?\b/i)
+            if (domainMatch) setFeedTarget(domainMatch[0])
+          }
+        }
+      } catch {}
     },
   }
 }

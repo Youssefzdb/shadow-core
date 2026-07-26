@@ -674,139 +674,82 @@ const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginM
   api.renderer.addPostProcessFn(post)
   api.lifecycle.onDispose(() => { api.renderer.removePostProcessFn(post) })
 
-  // 3. LIVE FEED — Multiple event sources for robustness
-  const disposers: (() => void)[] = []
-
-  // Source A: Try api.event (standard OpenCode event bus)
-  const eventBus = (api as any).event
-  if (eventBus?.on) {
-    // Listen to ALL message events
-    const unsub1 = eventBus.on("message.part", (event: any) => {
-      try {
-        const text = event?.properties?.text || event?.text || event?.properties?.content || ""
-        if (typeof text !== "string") return
-
-        // Check for [FEED] lines
-        if (text.includes("[FEED]")) {
-          updateFeedFromContent(text)
-        }
-      } catch {}
-    })
-
-    const unsub2 = eventBus.on("message.updated", (event: any) => {
-      try {
-        const text = event?.properties?.text || event?.text || ""
-        if (typeof text !== "string") return
-
-        // Detect target from user messages
-        const target = detectTarget(text)
-        if (target && feedState().target === "Not set") {
-          setFeedState(prev => ({ ...prev, target, running: true }))
-        }
-
-        // Check for [FEED] lines
-        if (text.includes("[FEED]")) {
-          updateFeedFromContent(text)
-        }
-      } catch {}
-    })
-
-    // Listen to tool calls — auto-generate feed events even without [FEED] lines
-    const unsub3 = eventBus.on("tool.call", (event: any) => {
-      try {
-        const toolName = event?.properties?.name || event?.name || event?.tool || ""
-        if (typeof toolName !== "string" || !toolName.includes("shannon")) return
-
-        // Mark as running + set phase from tool name
-        const phase = detectPhaseFromTool(toolName)
-        if (phase) {
-          const phaseMap: Record<string, number> = {
-            INIT: -1, RECON: 0, DISCOVERY: 1, BROWSER: 2, IDOR: 3, EXPLOIT: 4, REPORT: 5
-          }
-          setFeedState(prev => ({
-            ...prev,
-            running: true,
-            phase: phase === "INIT" ? "Init" : PHASES[phaseMap[phase]] || phase,
-            phaseIndex: phaseMap[phase] ?? prev.phaseIndex,
-          }))
-        }
-      } catch {}
-    })
-
-    // Listen to tool results
-    const unsub4 = eventBus.on("tool.result", (event: any) => {
-      try {
-        const toolName = event?.properties?.name || event?.name || event?.tool || ""
-        const result = event?.properties?.result || event?.result || event?.properties?.output || ""
-        if (typeof toolName !== "string" || !toolName.includes("shannon")) return
-
-        const resultText = typeof result === "string" ? result : JSON.stringify(result)
-        addToolFeedEvent(toolName, resultText)
-      } catch {}
-    })
-
-    disposers.push(unsub1, unsub2, unsub3, unsub4)
-  }
-
-  // Source B: Try store/session subscription (fallback)
-  const store = (api as any).store || (api as any).session
-  if (store?.subscribe) {
-    try {
-      const unsub5 = store.subscribe((state: any) => {
-        try {
-          // Try to get messages from store state
-          const messages = state?.messages || state?.session?.messages || []
-          for (const msg of messages) {
-            if (msg?.role === "user" && msg?.content) {
-              const target = detectTarget(typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content))
-              if (target && feedState().target === "Not set") {
-                setFeedState(prev => ({ ...prev, target, running: true }))
-              }
-            }
-            if (msg?.role === "assistant" && msg?.content) {
-              const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
-              if (text.includes("[FEED]")) {
-                updateFeedFromContent(text)
-              }
-            }
-          }
-        } catch {}
-      })
-      disposers.push(unsub5)
-    } catch {}
-  }
-
-  // Source C: Poll messages every 3 seconds (ultimate fallback)
+  // 3. LIVE FEED — File-based polling (most reliable)
+  // The main plugin writes [FEED] lines to /tmp/shadow-core-feed.log
+  // and the target to /tmp/shadow-core-target.txt
+  // The TUI polls these files every 2 seconds for live updates.
+  const FEED_FILE = "/tmp/shadow-core-feed.log"
+  const TARGET_FILE = "/tmp/shadow-core-target.txt"
+  let lastFeedSize = 0
+  let lastTarget = ""
+  
   const pollInterval = setInterval(async () => {
     try {
-      // Try to access current session messages through various API paths
-      const session = (api as any).session?.current || (api as any).store?.state?.session
-      if (!session?.messages) return
-
-      for (const msg of session.messages) {
-        if (msg?.role === "user" && msg?.content) {
-          const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
-          const target = detectTarget(text)
-          if (target && feedState().target === "Not set") {
-            setFeedState(prev => ({ ...prev, target, running: true }))
-          }
+      const fs = await import("fs")
+      
+      // Check target file
+      try {
+        const target = fs.readFileSync(TARGET_FILE, "utf-8").trim()
+        if (target && target !== lastTarget) {
+          lastTarget = target
+          setFeedState(prev => ({ ...prev, target, running: true }))
         }
-        if (msg?.role === "assistant" && msg?.content) {
-          const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
-          if (text.includes("[FEED]")) {
-            updateFeedFromContent(text)
+      } catch {}
+      
+      // Check feed file — only read new lines
+      let stats
+      try { stats = fs.statSync(FEED_FILE) } catch { return }
+      if (stats.size <= lastFeedSize) return
+      
+      const fullContent = fs.readFileSync(FEED_FILE, "utf-8")
+      const newContent = fullContent.slice(lastFeedSize)
+      lastFeedSize = stats.size
+      
+      // Parse [FEED] lines from new content
+      const lines = newContent.split("\n").filter(l => l.includes("[FEED]"))
+      const newEvents: FeedEvent[] = []
+      
+      for (const line of lines) {
+        const event = parseFeedLine(line)
+        if (event) newEvents.push(event)
+      }
+      
+      if (newEvents.length > 0) {
+        setFeedState(prev => {
+          const allEvents = [...prev.events, ...newEvents].slice(-15)
+          let findings = prev.findings
+          let critical = prev.critical
+          let high = prev.high
+          let medium = prev.medium
+          let low = prev.low
+          let phase = prev.phase
+          let phaseIndex = prev.phaseIndex
+          
+          for (const evt of newEvents) {
+            if (evt.result.toLowerCase().includes("finding") || evt.result.toLowerCase().includes("vulnerab") || evt.result.toLowerCase().includes("found")) {
+              findings++
+              if (evt.level === "error") critical++
+              else if (evt.level === "warning") high++
+              else if (evt.level === "success") medium++
+              else low++
+            }
+            const phaseMap: Record<string, number> = {
+              INIT: -1, RECON: 0, DISCOVERY: 1, BROWSER: 2, IDOR: 3, EXPLOIT: 4, REPORT: 5
+            }
+            if (phaseMap[evt.phase] !== undefined) {
+              phaseIndex = phaseMap[evt.phase]
+              phase = phaseIndex >= 0 ? PHASES[phaseIndex] : "Init"
+            }
           }
-        }
+          
+          return { ...prev, events: allEvents, findings, critical, high, medium, low, phase, phaseIndex, running: true }
+        })
       }
     } catch {}
-  }, 3000)
-  disposers.push(() => clearInterval(pollInterval))
-
-  // Cleanup
-  api.lifecycle.onDispose(() => {
-    disposers.forEach(d => { try { d() } catch {} })
-  })
-
+  }, 2000) // Poll every 2 seconds
+  
+  api.lifecycle.onDispose(() => { clearInterval(pollInterval) })
+  
   // 4. Dashboard route
   api.route.register([{
     name: "shadow.dashboard",

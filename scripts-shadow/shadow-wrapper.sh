@@ -224,12 +224,14 @@ case "$1" in
     show_logo
     sleep 0.8
     ensure_config
+    rm -f /tmp/shadow-core-feed.log /tmp/shadow-core-target.txt 2>/dev/null
     exec "$OPENCODE_BIN"
     ;;
 
   *)
     # Pass arguments to opencode
     ensure_config
+    rm -f /tmp/shadow-core-feed.log /tmp/shadow-core-target.txt 2>/dev/null
     exec "$OPENCODE_BIN" "$@"
     ;;
 esac
