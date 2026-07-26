@@ -1,0 +1,31 @@
+{
+  "shannon": {
+    "require_authorization": true,
+    "docker_enabled": false,
+    "native_mode": true,
+    "real_time_notifications": true,
+    "stealth_mode": false,
+    "report_format": "markdown",
+    "max_parallel_phases": 4,
+    "timeout_per_phase_minutes": 120
+  },
+  "agents": {
+    "shannon": {
+      "model": "anthropic/claude-opus-4-8",
+      "temperature": 0.1,
+      "max_output_tokens": 64000
+    },
+    "shannon-recon": {
+      "model": "anthropic/claude-opus-4-8",
+      "temperature": 0.05
+    },
+    "shannon-exploit": {
+      "model": "anthropic/claude-opus-4-8",
+      "temperature": 0.05
+    },
+    "shannon-report": {
+      "model": "anthropic/claude-opus-4-8",
+      "temperature": 0.1
+    }
+  }
+}

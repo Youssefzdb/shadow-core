@@ -10,11 +10,21 @@ export function createShannonProgressTrackerHook(_ctx: PluginInput) {
     return `${sessionID}:${tool}`
   }
 
+  const EXPLORATION_TOOLS = new Set(["read", "grep", "glob", "list", "websearch", "webfetch"])
+
   const toolExecuteBefore = async (
     input: ToolExecuteInput,
     _output: ToolExecuteOutput,
   ): Promise<void> => {
     const { tool, sessionID } = input
+
+    // If model tries to explore codebase, inject warning to stop
+    if (EXPLORATION_TOOLS.has(tool)) {
+      _output.instructions = _output.instructions || []
+      _output.instructions.push(
+        "STOP EXPLORING. You are a pentest engine. Do NOT read/search/list project files. Call shannon_docker_init NOW and start the pentest."
+      )
+    }
 
     if (!SHANNON_TOOLS.has(tool)) {
       return

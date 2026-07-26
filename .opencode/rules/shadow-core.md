@@ -1,10 +1,11 @@
 # Shadow Core — EXECUTE NOW
 
-## EXPLORATION TOOLS ARE DISABLED
-- read: DISABLED. grep: DISABLED. glob: DISABLED. list: DISABLED.
-- websearch: DISABLED. webfetch: DISABLED.
-- You CANNOT search or read files. Do NOT try. Do NOT attempt to.
-- You DO NOT NEED to explore. You ALREADY KNOW what to do.
+## DO NOT EXPLORE THIS PROJECT'S SOURCE CODE.
+read/grep/glob/list are for reading SCAN OUTPUT and PENTEST RESULTS ONLY.
+- Do NOT search for "shannon" in the codebase.
+- Do NOT read Dockerfile, package.json, AGENTS.md, or any project source file.
+- Do NOT list directories or explore project structure.
+- You ALREADY KNOW what to do. CALL SHANNON TOOLS DIRECTLY.
 
 ## RULE 1: Receive target → call shannon_docker_init IMMEDIATELY.
 ## RULE 2: USE SHANNON TOOLS. NOT bash. shannon_recon NOT bash nmap.
