@@ -127,9 +127,24 @@ export function createShannonProgressTrackerHook(_ctx: PluginInput) {
     }
   }
 
+  // Strip [FEED] lines and status markers from model chat output
+  const chatTransform = async (_input: any, output: any) => {
+    if (output?.assistant) {
+      let text = typeof output.assistant === "string" ? output.assistant : JSON.stringify(output.assistant)
+      // Remove [FEED] lines
+      text = text.replace(/\[FEED\][^\n]*\n?/g, "")
+      // Remove ***** target **** markers
+      text = text.replace(/\*{3,}[^*\n]*\*{3,}/g, "")
+      if (typeof output.assistant === "string") {
+        output.assistant = text
+      }
+    }
+  }
+
   return {
     "tool.execute.before": toolExecuteBefore,
     "tool.execute.after": toolExecuteAfter,
     event,
+    "experimental.chat.output.transform": chatTransform,
   }
 }

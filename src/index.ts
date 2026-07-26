@@ -147,6 +147,22 @@ const ShannonPlugin: Plugin = async (ctx: PluginInput) => {
         }
       } catch {}
     },
+
+    // Strip [FEED] lines and status markers from model chat output
+    "experimental.chat.output.transform": async (_input: any, output: any) => {
+      try {
+        if (output?.assistant) {
+          let text = typeof output.assistant === "string" ? output.assistant : ""
+          if (text) {
+            // Remove [FEED] lines from chat — they go to the live sidebar, not chat
+            text = text.replace(/\[FEED\][^\n]*\n?/g, "")
+            // Remove ***** target **** style markers
+            text = text.replace(/\*{3,}[^*\n]*\*{3,}/g, "")
+            output.assistant = text
+          }
+        }
+      } catch {}
+    },
   }
 }
 

@@ -5,6 +5,7 @@ import { useBindings, useKeymapSelector } from "@opentui/keymap/solid"
 import { RGBA, VignetteEffect, type KeyEvent, type Renderable } from "@opentui/core"
 import { createBindingLookup, type BindingConfig } from "@opentui/keymap/extras"
 import type { TuiPlugin, TuiPluginApi, TuiPluginMeta, TuiPluginModule, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
+import { readFileSync, statSync, existsSync } from "fs"
 
 // ════════════════════════════════════════════════════════════
 // SHADOW CORE — Split Screen TUI (Design 4) v2
@@ -683,13 +684,11 @@ const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginM
   let lastFeedSize = 0
   let lastTarget = ""
   
-  const pollInterval = setInterval(async () => {
+  const pollInterval = setInterval(() => {
     try {
-      const fs = await import("fs")
-      
       // Check target file
       try {
-        const target = fs.readFileSync(TARGET_FILE, "utf-8").trim()
+        const target = readFileSync(TARGET_FILE, "utf-8").trim()
         if (target && target !== lastTarget) {
           lastTarget = target
           setFeedState(prev => ({ ...prev, target, running: true }))
@@ -698,10 +697,10 @@ const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginM
       
       // Check feed file — only read new lines
       let stats
-      try { stats = fs.statSync(FEED_FILE) } catch { return }
+      try { stats = statSync(FEED_FILE) } catch { return }
       if (stats.size <= lastFeedSize) return
       
-      const fullContent = fs.readFileSync(FEED_FILE, "utf-8")
+      const fullContent = readFileSync(FEED_FILE, "utf-8")
       const newContent = fullContent.slice(lastFeedSize)
       lastFeedSize = stats.size
       
