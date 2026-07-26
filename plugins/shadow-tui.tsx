@@ -7,11 +7,12 @@ import { createBindingLookup, type BindingConfig } from "@opentui/keymap/extras"
 import type { TuiPlugin, TuiPluginApi, TuiPluginMeta, TuiPluginModule, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
 
 // ════════════════════════════════════════════════════════════
-// SHADOW CORE — Split Screen TUI (Design 4)
+// SHADOW CORE — Split Screen TUI (Design 4) v2
 // Top: Logo + Shield | Left: Chat | Right: Pentest Feed | Bottom: Status Bar
+// v2: Fixed live feed — proper event listening + URL target detection
 // ════════════════════════════════════════════════════════════
 
-// ─── Shadow Core ASCII Logo (large) ───
+// ─── Shadow Core ASCII Logo ───
 const LOGO = [
   "  ███████╗██╗  ██╗ █████╗ ██████╗  ██████╗ ██╗    ██╗",
   "  ██╔════╝██║  ██║██╔══██╗██╔══██╗██╔═══██╗██║    ██║",
@@ -46,6 +47,7 @@ const PHASES = ["Recon", "Discovery", "Browser", "IDOR", "Exploit", "Report"]
 
 // ════════════════════════════════════════════════════════════
 // LIVE FEED SYSTEM — Reactive, updates from session messages
+// v2: Multiple event sources + URL detection + tool call tracking
 // ════════════════════════════════════════════════════════════
 
 type FeedEvent = {
@@ -70,7 +72,6 @@ type FeedState = {
   running: boolean
 }
 
-// Global reactive feed state — shared across all slot renders
 const [feedState, setFeedState] = createSignal<FeedState>({
   target: "Not set",
   phase: "Idle",
@@ -85,7 +86,6 @@ const [feedState, setFeedState] = createSignal<FeedState>({
   running: false,
 })
 
-// Feed event colors
 function feedColor(level: string, skin: Skin): string {
   switch (level) {
     case "success": return skin.success
@@ -95,6 +95,11 @@ function feedColor(level: string, skin: Skin): string {
   }
 }
 
+function nowTime(): string {
+  const now = new Date()
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`
+}
+
 // Parse [FEED] lines from message output
 function parseFeedLine(line: string): FeedEvent | null {
   const match = line.match(/\[FEED\]\s*(\d{2}:\d{2}:\d{2})\s*\|\s*(\w+)\s*\|\s*(.+?)\s*\|\s*(.+)/)
@@ -102,76 +107,119 @@ function parseFeedLine(line: string): FeedEvent | null {
   const [, time, phase, action, result] = match
   let level: FeedEvent["level"] = "info"
   const lower = (action + " " + result).toLowerCase()
-  if (lower.includes("vulnerab") || lower.includes("found") || lower.includes("extracted") || lower.includes("compromise")) level = "success"
+  if (lower.includes("vulnerab") || lower.includes("found") || lower.includes("extracted") || lower.includes("compromise") || lower.includes("cracked") || lower.includes("dumped")) level = "success"
   else if (lower.includes("error") || lower.includes("fail") || lower.includes("critical")) level = "error"
   else if (lower.includes("warning") || lower.includes("suspicious")) level = "warning"
   return { time, phase: phase.toUpperCase(), action, result, level }
 }
 
-// Update feed from message content
-function updateFeedFromMessage(content: string) {
+// Detect target URL/IP from any text
+function detectTarget(text: string): string | null {
+  // URL pattern
+  const urlMatch = text.match(/https?:\/\/[^\s"'<>#]+/i)
+  if (urlMatch) return urlMatch[0].slice(0, 50)
+  // IP pattern
+  const ipMatch = text.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/)
+  if (ipMatch) return ipMatch[0]
+  // Domain pattern
+  const domainMatch = text.match(/\b[a-z0-9][-a-z0-9]*\.[a-z]{2,}(?:\.[a-z]{2,})?\b/i)
+  if (domainMatch) return domainMatch[0]
+  return null
+}
+
+// Detect phase from tool name
+function detectPhaseFromTool(toolName: string): string | null {
+  const lower = toolName.toLowerCase()
+  if (lower.includes("recon")) return "RECON"
+  if (lower.includes("vuln") || lower.includes("discovery")) return "DISCOVERY"
+  if (lower.includes("browser")) return "BROWSER"
+  if (lower.includes("idor")) return "IDOR"
+  if (lower.includes("exploit")) return "EXPLOIT"
+  if (lower.includes("report")) return "REPORT"
+  if (lower.includes("docker_init")) return "INIT"
+  return null
+}
+
+// Auto-generate feed event from tool call (when no [FEED] line is output by model)
+function addToolFeedEvent(toolName: string, resultText: string) {
+  const phase = detectPhaseFromTool(toolName)
+  if (!phase) return
+  
+  const phaseMap: Record<string, number> = {
+    INIT: -1, RECON: 0, DISCOVERY: 1, BROWSER: 2, IDOR: 3, EXPLOIT: 4, REPORT: 5
+  }
+  const phaseIdx = phaseMap[phase] ?? -1
+  const phaseDisplay = phase === "INIT" ? "INIT" : PHASES[phaseIdx] || phase
+
+  let level: FeedEvent["level"] = "info"
+  const lower = resultText.toLowerCase()
+  if (lower.includes("vulnerab") || lower.includes("found") || lower.includes("open") || lower.includes("extracted")) level = "success"
+  else if (lower.includes("error") || lower.includes("fail") || lower.includes("critical")) level = "error"
+  else if (lower.includes("warning") || lower.includes("suspicious")) level = "warning"
+
+  const event: FeedEvent = {
+    time: nowTime(),
+    phase: phase,
+    action: toolName.replace("shannon_", ""),
+    result: resultText.slice(0, 60).replace(/\n/g, " ").trim() || "executed",
+    level,
+  }
+
+  setFeedState(prev => {
+    const allEvents = [...prev.events, event].slice(-15)
+    const running = phase !== "REPORT"
+    return {
+      ...prev,
+      events: allEvents,
+      phase: phaseDisplay,
+      phaseIndex: phaseIdx,
+      running,
+    }
+  })
+}
+
+// Update feed from [FEED] lines in message content
+function updateFeedFromContent(content: string) {
   const lines = content.split("\n")
   const feedLines = lines.filter(l => l.includes("[FEED]"))
-  if (feedLines.length === 0) return
-
+  
   const newEvents: FeedEvent[] = []
   for (const line of feedLines) {
     const event = parseFeedLine(line)
     if (event) newEvents.push(event)
   }
-  if (newEvents.length === 0) return
 
-  setFeedState(prev => {
-    const allEvents = [...prev.events, ...newEvents].slice(-15) // Keep last 15
-    let findings = prev.findings
-    let critical = prev.critical
-    let high = prev.high
-    let medium = prev.medium
-    let low = prev.low
-    let phase = prev.phase
-    let phaseIndex = prev.phaseIndex
-
-    for (const evt of newEvents) {
-      if (evt.result.toLowerCase().includes("found") || evt.result.toLowerCase().includes("vulnerab")) {
-        findings++
-        if (evt.level === "error") critical++
-        else if (evt.level === "warning") high++
-        else if (evt.level === "success") medium++
-        else low++
-      }
-      // Update phase
-      const phaseMap: Record<string, number> = {
-        RECON: 0, DISCOVERY: 1, BROWSER: 2, IDOR: 3, EXPLOIT: 4, REPORT: 5
-      }
-      if (phaseMap[evt.phase] !== undefined) {
-        phaseIndex = phaseMap[evt.phase]
-        phase = PHASES[phaseIndex]
-      }
-    }
-
-    return { ...prev, events: allEvents, findings, critical, high, medium, low, phase, phaseIndex, running: true }
-  })
-}
-
-// Auto-generate feed ticks when running (simulated activity)
-let tickInterval: any = null
-function startFeedTicker() {
-  if (tickInterval) return
-  tickInterval = setInterval(() => {
+  if (newEvents.length > 0) {
     setFeedState(prev => {
-      if (!prev.running) return prev
-      const now = new Date()
-      const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`
-      const tickEvents: FeedEvent[] = [
-        { time, phase: prev.phase.toUpperCase(), action: "scanning", result: "in progress...", level: "info" },
-      ]
-      return { ...prev, events: [...prev.events, ...tickEvents].slice(-15) }
-    })
-  }, 30000) // Every 30 seconds
-}
+      const allEvents = [...prev.events, ...newEvents].slice(-15)
+      let findings = prev.findings
+      let critical = prev.critical
+      let high = prev.high
+      let medium = prev.medium
+      let low = prev.low
+      let phase = prev.phase
+      let phaseIndex = prev.phaseIndex
 
-function stopFeedTicker() {
-  if (tickInterval) { clearInterval(tickInterval); tickInterval = null }
+      for (const evt of newEvents) {
+        if (evt.result.toLowerCase().includes("found") || evt.result.toLowerCase().includes("vulnerab")) {
+          findings++
+          if (evt.level === "error") critical++
+          else if (evt.level === "warning") high++
+          else if (evt.level === "success") medium++
+          else low++
+        }
+        const phaseMap: Record<string, number> = {
+          RECON: 0, DISCOVERY: 1, BROWSER: 2, IDOR: 3, EXPLOIT: 4, REPORT: 5
+        }
+        if (phaseMap[evt.phase] !== undefined) {
+          phaseIndex = phaseMap[evt.phase]
+          phase = PHASES[phaseIndex]
+        }
+      }
+
+      return { ...prev, events: allEvents, findings, critical, high, medium, low, phase, phaseIndex, running: true }
+    })
+  }
 }
 
 // ─── Skin helper ───
@@ -206,27 +254,16 @@ function look(theme: any): Skin {
 
 const tone = (api: TuiPluginApi) => look(api.theme.current)
 
-// ─── Commands ───
-const command = {
-  dashboard: "shadow_dashboard",
-  scan: "shadow_scan",
-  recon: "shadow_recon",
-  report: "shadow_report",
-  home: "shadow_home",
-}
-
 // ════════════════════════════════════════════════════════════
-// SLOT: home_logo — Large logo + shield + tagline
+// SLOT: home_logo
 // ════════════════════════════════════════════════════════════
 function homeLogoSlot(ctx: any): JSX.Element {
   const s = look(ctx.theme?.current)
   return (
     <box flexDirection="row" gap={3} alignItems="center">
-      {/* Logo */}
       <box flexDirection="column">
         {LOGO.map((line) => <text fg={s.accent}>{line}</text>)}
       </box>
-      {/* Shield */}
       <box flexDirection="column" alignItems="center">
         {SHIELD.map((line) => <text fg={s.primary}>{line}</text>)}
       </box>
@@ -241,7 +278,6 @@ function homeBottomSlot(ctx: any): JSX.Element {
   const s = look(ctx.theme?.current)
   return (
     <box width="100%" flexShrink={0} flexDirection="column" gap={0}>
-      {/* Tagline */}
       <box width="100%" alignItems="center" flexDirection="row" gap={2}>
         <text fg={s.accent}>  7 FREE MODELS</text>
         <text fg={s.muted}>—</text>
@@ -251,20 +287,14 @@ function homeBottomSlot(ctx: any): JSX.Element {
         <text fg={s.muted}>—</text>
         <text fg={s.info}>INFINITE LOOP</text>
       </box>
-
-      {/* Separator */}
       <box width="100%">
         <text fg={s.border}>  ────────────────────────────────────────────────────────────────────────────</text>
       </box>
-
-      {/* Agent list */}
       <box width="100%" flexDirection="row" gap={2} paddingLeft={2}>
         {AGENTS.map((agent) => (
           <text fg={agent.color}>●{agent.id}</text>
         ))}
       </box>
-
-      {/* Commands */}
       <box width="100%" flexDirection="row" gap={3} paddingLeft={2} paddingTop={0}>
         <text fg={s.warning}><b>F1</b></text><text fg={s.muted}>shannon-scan</text>
         <text fg={s.warning}><b>F2</b></text><text fg={s.muted}>shannon-recon</text>
@@ -276,7 +306,7 @@ function homeBottomSlot(ctx: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: home_footer — Status bar (thin red bar at bottom)
+// SLOT: home_footer — Status bar
 // ════════════════════════════════════════════════════════════
 function homeFooterSlot(ctx: any): JSX.Element {
   const s = look(ctx.theme?.current)
@@ -289,15 +319,24 @@ function homeFooterSlot(ctx: any): JSX.Element {
       backgroundColor={s.accent}
       paddingLeft={1}
       paddingRight={1}
+      flexShrink={0}
     >
-      <text fg={s.bg}><b>SHADOW CORE</b></text>
-      <text fg={s.bg}>Agent: {state.agent} | Phase: {state.phase} | Target: {state.target} | Findings: {state.findings}</text>
+      <box flexDirection="row" gap={2}>
+        <text fg={s.bg}><b>SHADOW CORE</b></text>
+        <text fg={s.bg}>|</text>
+        <text fg={s.bg}>Agent: <b>{state.agent}</b></text>
+        <text fg={s.bg}>|</text>
+        <text fg={s.bg}>Phase: <b>{state.phase}</b></text>
+        <text fg={s.bg}>|</text>
+        <text fg={s.bg}>Target: <b>{state.target}</b></text>
+      </box>
+      <text fg={s.bg}>{state.running ? "● RUNNING" : "○ READY"} | 7 Free Models | Kali Native</text>
     </box>
   )
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: app_bottom — Global status bar (visible in all screens)
+// SLOT: app_bottom — Global status bar
 // ════════════════════════════════════════════════════════════
 function appBottomSlot(ctx: any): JSX.Element {
   const s = look(ctx.theme?.current)
@@ -329,7 +368,7 @@ function appBottomSlot(ctx: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: sidebar_title — Replace default title
+// SLOT: sidebar_title
 // ════════════════════════════════════════════════════════════
 function sidebarTitleSlot(ctx: any, value: any): JSX.Element {
   const s = look(ctx.theme?.current)
@@ -342,13 +381,13 @@ function sidebarTitleSlot(ctx: any, value: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: sidebar_content (order 0) — Pentest Feed (top)
+// SLOT: sidebar_content (order 0) — Pentest Feed
 // ════════════════════════════════════════════════════════════
 function sidebarFeedSlot(ctx: any, value: any): JSX.Element {
   const s = look(ctx.theme?.current)
   const sid = value?.session_id ? String(value.session_id).slice(0, 8) : "--------"
   const state = feedState()
-  const events = state.events.slice(-8) // Show last 8 in sidebar
+  const events = state.events.slice(-8)
   return (
     <box
       border
@@ -385,7 +424,7 @@ function sidebarFeedSlot(ctx: any, value: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: sidebar_content (order 200) — Agents list (middle)
+// SLOT: sidebar_content (order 200) — Agents list
 // ════════════════════════════════════════════════════════════
 function sidebarAgentsSlot(ctx: any, value: any): JSX.Element {
   const s = look(ctx.theme?.current)
@@ -418,10 +457,11 @@ function sidebarAgentsSlot(ctx: any, value: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: sidebar_content (order 700) — Phases (bottom)
+// SLOT: sidebar_content (order 700) — Phases (reactive)
 // ════════════════════════════════════════════════════════════
 function sidebarPhasesSlot(ctx: any, value: any): JSX.Element {
   const s = look(ctx.theme?.current)
+  const state = feedState()
   return (
     <box
       border
@@ -437,13 +477,19 @@ function sidebarPhasesSlot(ctx: any, value: any): JSX.Element {
       <text fg={s.info}><b>▰ PENTEST PHASES ▰</b></text>
       <text fg={s.border}> ────────────────────</text>
       <text fg={s.muted}> </text>
-      {PHASES.map((phase, i) => (
-        <box flexDirection="row" gap={1}>
-          <text fg={i === 0 ? s.accent : s.muted}>{i === 0 ? "▶" : "○"}</text>
-          <text fg={i === 0 ? s.text : s.muted}>{phase}</text>
-          {i === 0 ? <text fg={s.accent}>◄</text> : null}
-        </box>
-      ))}
+      {PHASES.map((phase, i) => {
+        const isActive = state.phaseIndex === i
+        const isDone = state.phaseIndex > i
+        return (
+          <box flexDirection="row" gap={1}>
+            <text fg={isActive ? s.accent : (isDone ? s.success : s.muted)}>
+              {isActive ? "▶" : isDone ? "✓" : "○"}
+            </text>
+            <text fg={isActive ? s.text : (isDone ? s.success : s.muted)}>{phase}</text>
+            {isActive ? <text fg={s.accent}>◄</text> : null}
+          </box>
+        )
+      })}
       <text fg={s.muted}> </text>
       <text fg={s.warning}> F1: Start full scan</text>
       <text fg={s.warning}> F2: Recon only</text>
@@ -454,7 +500,7 @@ function sidebarPhasesSlot(ctx: any, value: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: sidebar_footer — Compact info
+// SLOT: sidebar_footer
 // ════════════════════════════════════════════════════════════
 function sidebarFooterSlot(ctx: any, value: any): JSX.Element {
   const s = look(ctx.theme?.current)
@@ -467,7 +513,7 @@ function sidebarFooterSlot(ctx: any, value: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: home_prompt_right — Agent indicator
+// SLOT: home_prompt_right
 // ════════════════════════════════════════════════════════════
 function homePromptRightSlot(ctx: any): JSX.Element {
   const s = look(ctx.theme?.current)
@@ -479,7 +525,7 @@ function homePromptRightSlot(ctx: any): JSX.Element {
 }
 
 // ════════════════════════════════════════════════════════════
-// SLOT: session_prompt_right — Shadow indicator
+// SLOT: session_prompt_right
 // ════════════════════════════════════════════════════════════
 function sessionPromptRightSlot(ctx: any, value: any): JSX.Element {
   const s = look(ctx.theme?.current)
@@ -501,16 +547,15 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
   useBindings(() => ({
     enabled: () => props.api.route.current.name === "shadow.dashboard",
     commands: [
-      { name: command.home, run() { props.api.route.navigate("home") } },
+      { name: "shadow_home", run() { props.api.route.navigate("home") } },
     ],
     bindings: [
-      { command: command.home, keys: ["escape"] },
+      { command: "shadow_home", keys: ["escape"] },
     ],
   }))
 
   return (
     <box width={dim().width} height={dim().height} backgroundColor={s.bg} flexDirection="column">
-      {/* Header */}
       <box width="100%" flexDirection="row" justifyContent="space-between"
         backgroundColor={s.panel} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}
         borderBottom borderColor={s.accent}>
@@ -523,7 +568,6 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
         <text fg={s.muted}>ESC: Back to chat</text>
       </box>
 
-      {/* Body — 3 columns */}
       <box flexDirection="row" flexGrow={1} paddingLeft={1} paddingRight={1} paddingTop={1} gap={1}>
         {/* Left: Agents */}
         <box width="28%" border borderColor={s.border} backgroundColor={s.panel}
@@ -549,16 +593,23 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
           <text fg={s.warning}><b>▰ PENTEST STATUS ▰</b></text>
           <text fg={s.border}>────────────────────</text>
           <text fg={s.accent}><b>PHASES</b></text>
-          {PHASES.map((phase, i) => (
-            <box flexDirection="row" gap={1}>
-              <text fg={i === 0 ? s.accent : s.muted}>{i === 0 ? "▶" : "○"}</text>
-              <text fg={i === 0 ? s.text : s.muted}>{phase}</text>
-              {i === 0 ? <text fg={s.accent}>◄ ACTIVE</text> : null}
-            </box>
-          ))}
+          {PHASES.map((phase, i) => {
+            const isActive = feedState().phaseIndex === i
+            const isDone = feedState().phaseIndex > i
+            return (
+              <box flexDirection="row" gap={1}>
+                <text fg={isActive ? s.accent : (isDone ? s.success : s.muted)}>
+                  {isActive ? "▶" : isDone ? "✓" : "○"}
+                </text>
+                <text fg={isActive ? s.text : (isDone ? s.success : s.muted)}>{phase}</text>
+                {isActive ? <text fg={s.accent}>◄ ACTIVE</text> : null}
+                {isDone ? <text fg={s.success}>✓ DONE</text> : null}
+              </box>
+            )
+          })}
           <text fg={s.border}>────────────────────</text>
           <text fg={s.accent}><b>TARGET</b></text>
-          <text fg={s.text}> Target: <span style={{ fg: s.warning }}>Not set</span></text>
+          <text fg={s.text}> Target: <span style={{ fg: s.warning }}>{feedState().target}</span></text>
           <text fg={s.text}> Mode:   <span style={{ fg: s.success }}>Kali Native</span></text>
           <text fg={s.text}> Loop:   <span style={{ fg: s.info }}>Infinite</span></text>
           <text fg={s.border}>────────────────────</text>
@@ -567,7 +618,6 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
           <text fg={s.warning}>  High:      {feedState().high}</text>
           <text fg={s.info}>  Medium:    {feedState().medium}</text>
           <text fg={s.success}>  Low:       {feedState().low}</text>
-          <text fg={s.muted}>  Info:      {feedState().findings - feedState().critical - feedState().high - feedState().medium - feedState().low}</text>
         </box>
 
         {/* Right: Shield + Commands */}
@@ -598,7 +648,6 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
         </box>
       </box>
 
-      {/* Status bar */}
       <box width="100%" flexDirection="row" justifyContent="space-between"
         backgroundColor={s.accent} paddingLeft={1} paddingRight={1}>
         <text fg={s.bg}><b>SHADOW CORE</b></text>
@@ -610,6 +659,7 @@ function Dashboard(props: { api: TuiPluginApi; meta: TuiPluginMeta }): JSX.Eleme
 
 // ════════════════════════════════════════════════════════════
 // TUI PLUGIN ENTRY POINT
+// v2: Robust event listening for live feed
 // ════════════════════════════════════════════════════════════
 const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginMeta) => {
   if (_options?.enabled === false) return
@@ -618,88 +668,182 @@ const tui: TuiPlugin = async (api: TuiPluginApi, _options: any, meta: TuiPluginM
   await api.theme.install("./themes/shadow-core.json")
   api.theme.set("shadow-core")
 
-  // 2. Vignette — cinematic dark edges
+  // 2. Vignette
   const fx = new VignetteEffect(0.35)
   const post = fx.apply.bind(fx)
   api.renderer.addPostProcessFn(post)
   api.lifecycle.onDispose(() => { api.renderer.removePostProcessFn(post) })
 
-  // 2b. Listen to session messages for live feed updates
+  // 3. LIVE FEED — Multiple event sources for robustness
+  const disposers: (() => void)[] = []
+
+  // Source A: Try api.event (standard OpenCode event bus)
   const eventBus = (api as any).event
   if (eventBus?.on) {
-    const unsubMessage = eventBus.on("message.part", (event: any) => {
+    // Listen to ALL message events
+    const unsub1 = eventBus.on("message.part", (event: any) => {
       try {
-        const text = event?.properties?.text || event?.text || ""
-        if (typeof text === "string" && text.includes("[FEED]")) {
-          updateFeedFromMessage(text)
-        }
-        // Auto-detect target from first user message
-        if (event?.type === "message.updated" || event?.properties?.type === "message.updated") {
-          const content = JSON.stringify(event)
-          const targetMatch = content.match(/(?:target|objectif|scope)[:\s]+(.+?)[\n\r"']/i)
-          if (targetMatch) {
-            setFeedState(prev => ({ ...prev, target: targetMatch[1].trim().slice(0, 40), running: true }))
-            startFeedTicker()
-          }
+        const text = event?.properties?.text || event?.text || event?.properties?.content || ""
+        if (typeof text !== "string") return
+
+        // Check for [FEED] lines
+        if (text.includes("[FEED]")) {
+          updateFeedFromContent(text)
         }
       } catch {}
     })
-    api.lifecycle.onDispose(() => { unsubMessage?.(); stopFeedTicker() })
-  } else {
-    // Fallback: start ticker anyway for visual feedback
-    startFeedTicker()
-    api.lifecycle.onDispose(() => stopFeedTicker())
+
+    const unsub2 = eventBus.on("message.updated", (event: any) => {
+      try {
+        const text = event?.properties?.text || event?.text || ""
+        if (typeof text !== "string") return
+
+        // Detect target from user messages
+        const target = detectTarget(text)
+        if (target && feedState().target === "Not set") {
+          setFeedState(prev => ({ ...prev, target, running: true }))
+        }
+
+        // Check for [FEED] lines
+        if (text.includes("[FEED]")) {
+          updateFeedFromContent(text)
+        }
+      } catch {}
+    })
+
+    // Listen to tool calls — auto-generate feed events even without [FEED] lines
+    const unsub3 = eventBus.on("tool.call", (event: any) => {
+      try {
+        const toolName = event?.properties?.name || event?.name || event?.tool || ""
+        if (typeof toolName !== "string" || !toolName.includes("shannon")) return
+
+        // Mark as running + set phase from tool name
+        const phase = detectPhaseFromTool(toolName)
+        if (phase) {
+          const phaseMap: Record<string, number> = {
+            INIT: -1, RECON: 0, DISCOVERY: 1, BROWSER: 2, IDOR: 3, EXPLOIT: 4, REPORT: 5
+          }
+          setFeedState(prev => ({
+            ...prev,
+            running: true,
+            phase: phase === "INIT" ? "Init" : PHASES[phaseMap[phase]] || phase,
+            phaseIndex: phaseMap[phase] ?? prev.phaseIndex,
+          }))
+        }
+      } catch {}
+    })
+
+    // Listen to tool results
+    const unsub4 = eventBus.on("tool.result", (event: any) => {
+      try {
+        const toolName = event?.properties?.name || event?.name || event?.tool || ""
+        const result = event?.properties?.result || event?.result || event?.properties?.output || ""
+        if (typeof toolName !== "string" || !toolName.includes("shannon")) return
+
+        const resultText = typeof result === "string" ? result : JSON.stringify(result)
+        addToolFeedEvent(toolName, resultText)
+      } catch {}
+    })
+
+    disposers.push(unsub1, unsub2, unsub3, unsub4)
   }
 
-  // 3. Dashboard route
+  // Source B: Try store/session subscription (fallback)
+  const store = (api as any).store || (api as any).session
+  if (store?.subscribe) {
+    try {
+      const unsub5 = store.subscribe((state: any) => {
+        try {
+          // Try to get messages from store state
+          const messages = state?.messages || state?.session?.messages || []
+          for (const msg of messages) {
+            if (msg?.role === "user" && msg?.content) {
+              const target = detectTarget(typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content))
+              if (target && feedState().target === "Not set") {
+                setFeedState(prev => ({ ...prev, target, running: true }))
+              }
+            }
+            if (msg?.role === "assistant" && msg?.content) {
+              const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
+              if (text.includes("[FEED]")) {
+                updateFeedFromContent(text)
+              }
+            }
+          }
+        } catch {}
+      })
+      disposers.push(unsub5)
+    } catch {}
+  }
+
+  // Source C: Poll messages every 3 seconds (ultimate fallback)
+  const pollInterval = setInterval(async () => {
+    try {
+      // Try to access current session messages through various API paths
+      const session = (api as any).session?.current || (api as any).store?.state?.session
+      if (!session?.messages) return
+
+      for (const msg of session.messages) {
+        if (msg?.role === "user" && msg?.content) {
+          const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
+          const target = detectTarget(text)
+          if (target && feedState().target === "Not set") {
+            setFeedState(prev => ({ ...prev, target, running: true }))
+          }
+        }
+        if (msg?.role === "assistant" && msg?.content) {
+          const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)
+          if (text.includes("[FEED]")) {
+            updateFeedFromContent(text)
+          }
+        }
+      }
+    } catch {}
+  }, 3000)
+  disposers.push(() => clearInterval(pollInterval))
+
+  // Cleanup
+  api.lifecycle.onDispose(() => {
+    disposers.forEach(d => { try { d() } catch {} })
+  })
+
+  // 4. Dashboard route
   api.route.register([{
     name: "shadow.dashboard",
     render: () => <Dashboard api={api} meta={meta} />,
   }])
 
-  // 4. Register all slots
-  // Home screen
+  // 5. Register all slots
   api.slots.register({ order: 0, slots: { home_logo: homeLogoSlot } })
   api.slots.register({ order: 0, slots: { home_bottom: homeBottomSlot } })
   api.slots.register({ order: 0, slots: { home_footer: homeFooterSlot } })
   api.slots.register({ order: 0, slots: { home_prompt_right: homePromptRightSlot } })
-
-  // Session
   api.slots.register({ order: 0, slots: { session_prompt_right: sessionPromptRightSlot } })
-
-  // Sidebar
   api.slots.register({ order: 0, slots: { sidebar_title: sidebarTitleSlot } })
   api.slots.register({ order: 0, slots: { sidebar_content: sidebarFeedSlot } })
   api.slots.register({ order: 200, slots: { sidebar_content: sidebarAgentsSlot } })
   api.slots.register({ order: 700, slots: { sidebar_content: sidebarPhasesSlot } })
   api.slots.register({ order: 0, slots: { sidebar_footer: sidebarFooterSlot } })
-
-  // Global status bar (all screens)
   api.slots.register({ order: 0, slots: { app_bottom: appBottomSlot } })
 
-  // 5. Keybindings
+  // 6. Keybindings
+  const command = {
+    dashboard: "shadow_dashboard",
+    scan: "shadow_scan",
+    recon: "shadow_recon",
+    report: "shadow_report",
+    home: "shadow_home",
+  }
   api.keymap.registerLayer({
     commands: [
-      {
-        name: command.dashboard, title: "Shadow Core Dashboard",
-        category: "Shadow Core", namespace: "palette", slashName: "shadow-dash",
-        run() { api.route.navigate("shadow.dashboard") },
-      },
-      {
-        name: command.scan, title: "Shannon Full Scan",
-        category: "Shadow Core", namespace: "palette", slashName: "shannon-scan",
-        run() { api.route.navigate("home") },
-      },
-      {
-        name: command.recon, title: "Shannon Recon",
-        category: "Shadow Core", namespace: "palette", slashName: "shannon-recon",
-        run() { api.route.navigate("home") },
-      },
-      {
-        name: command.report, title: "Shannon Report",
-        category: "Shadow Core", namespace: "palette", slashName: "shannon-report",
-        run() { api.route.navigate("home") },
-      },
+      { name: command.dashboard, title: "Shadow Core Dashboard", category: "Shadow Core", namespace: "palette", slashName: "shadow-dash",
+        run() { api.route.navigate("shadow.dashboard") } },
+      { name: command.scan, title: "Shannon Full Scan", category: "Shadow Core", namespace: "palette", slashName: "shannon-scan",
+        run() { api.route.navigate("home") } },
+      { name: command.recon, title: "Shannon Recon", category: "Shadow Core", namespace: "palette", slashName: "shannon-recon",
+        run() { api.route.navigate("home") } },
+      { name: command.report, title: "Shannon Report", category: "Shadow Core", namespace: "palette", slashName: "shannon-report",
+        run() { api.route.navigate("home") } },
     ],
     bindings: [
       { command: command.dashboard, keys: ["ctrl+d"] },
