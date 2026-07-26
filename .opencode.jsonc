@@ -1,24 +1,22 @@
 {
   "$schema": "https://opencode.ai/config.json",
-
-  // ════════════════════════════════════════════════════════════
-  // Shadow Core — OpenCode Configuration
-  // 7 Free Models — No API Key Required
-  // ════════════════════════════════════════════════════════════
-
-  // Default model (free, no API key)
   "model": "opencode/mimo-v2.5-free",
   "small_model": "opencode/ling-3.0-flash-free",
   "default_agent": "build",
-
-  // ───────────────────────────────────────────────────────────
-  // Agents — each uses a free model
-  // ───────────────────────────────────────────────────────────
+  "tui": {
+    "plugin": [
+      [
+        "./plugins/shadow-tui.tsx",
+        {
+          "enabled": true
+        }
+      ]
+    ]
+  },
   "agent": {
-    // Primary coding agent — used when you type a message
     "build": {
       "model": "opencode/mimo-v2.5-free",
-      "description": "Shadow Core — autonomous penetration testing engine",
+      "description": "Shadow Core - autonomous penetration testing engine",
       "steps": 200,
       "tools": {
         "bash": true,
@@ -35,11 +33,9 @@
         "skill": true
       }
     },
-
-    // Planning agent — strategic pentest planning
     "plan": {
       "model": "opencode/nemotron-3-ultra-free",
-      "description": "Shadow Core strategist — pentest planning & attack surface mapping",
+      "description": "Shadow Core strategist - pentest planning",
       "steps": 100,
       "tools": {
         "read": true,
@@ -50,11 +46,9 @@
         "websearch": true
       }
     },
-
-    // General purpose agent — recon & analysis
     "general": {
       "model": "opencode/deepseek-v4-flash-free",
-      "description": "Shadow Core recon — information gathering & analysis",
+      "description": "Shadow Core recon - information gathering",
       "steps": 100,
       "tools": {
         "bash": true,
@@ -67,16 +61,10 @@
         "websearch": true
       }
     },
-
-    // ─────────────────────────────────────────────────────
-    // 7 Free Agent Variants — one per free model
-    // Switch with: Tab key or @agent-name
-    // ─────────────────────────────────────────────────────
-
     "shadow-mimo": {
       "model": "opencode/mimo-v2.5-free",
       "mode": "primary",
-      "description": "MiMo V2.5 — Xiaomi flagship, comparable to Claude Sonnet 4.6",
+      "description": "MiMo V2.5 - Xiaomi flagship, comparable to Claude Sonnet 4.6",
       "color": "#FF6B35",
       "steps": 200,
       "tools": {
@@ -94,11 +82,10 @@
         "skill": true
       }
     },
-
     "shadow-pickle": {
       "model": "opencode/big-pickle",
       "mode": "primary",
-      "description": "Big Pickle — stealth model from unnamed lab, frontier coding",
+      "description": "Big Pickle - stealth model, frontier coding",
       "color": "#7CB342",
       "steps": 200,
       "tools": {
@@ -116,11 +103,10 @@
         "skill": true
       }
     },
-
     "shadow-deepseek": {
       "model": "opencode/deepseek-v4-flash-free",
       "mode": "primary",
-      "description": "DeepSeek V4 Flash — fast reasoning & code analysis",
+      "description": "DeepSeek V4 Flash - fast reasoning & code analysis",
       "color": "#42A5F5",
       "steps": 200,
       "tools": {
@@ -138,11 +124,10 @@
         "skill": true
       }
     },
-
     "shadow-laguna": {
       "model": "opencode/laguna-s-2.1-free",
       "mode": "primary",
-      "description": "Laguna S 2.1 — deep analysis & vulnerability research",
+      "description": "Laguna S 2.1 - deep analysis & vulnerability research",
       "color": "#26C6DA",
       "steps": 200,
       "tools": {
@@ -160,11 +145,10 @@
         "skill": true
       }
     },
-
     "shadow-ling": {
       "model": "opencode/ling-3.0-flash-free",
       "mode": "primary",
-      "description": "Ling 3.0 Flash — ultra-fast scanning & quick recon",
+      "description": "Ling 3.0 Flash - ultra-fast scanning & quick recon",
       "color": "#FFCA28",
       "steps": 200,
       "tools": {
@@ -182,11 +166,10 @@
         "skill": true
       }
     },
-
     "shadow-nemotron": {
       "model": "opencode/nemotron-3-ultra-free",
       "mode": "primary",
-      "description": "NVIDIA Nemotron 3 Ultra — heavy reasoning, exploit design",
+      "description": "NVIDIA Nemotron 3 Ultra - heavy reasoning, exploit design",
       "color": "#76B900",
       "steps": 200,
       "tools": {
@@ -204,11 +187,10 @@
         "skill": true
       }
     },
-
     "shadow-north": {
       "model": "opencode/north-mini-code-free",
       "mode": "primary",
-      "description": "North Mini Code — lightweight coding & script generation",
+      "description": "North Mini Code - lightweight coding & script generation",
       "color": "#AB47BC",
       "steps": 200,
       "tools": {
@@ -227,28 +209,20 @@
       }
     }
   },
-
-  // ───────────────────────────────────────────────────────
-  // Shannon Commands (available inside TUI)
-  // ───────────────────────────────────────────────────────
   "command": {
     "shannon-scan": {
       "template": "# Shannon Full Autonomous Pentest\n\nExecute a complete penetration test against the target:\n1. shannon_docker_init\n2. shannon_recon <target>\n3. shannon_vuln_discovery <target>\n4. shannon_browser <target> (if web app)\n5. shannon_idor_test <target> (if API)\n6. shannon_exploit <target>\n7. shannon_report\n8. shannon_docker_cleanup\n\nFollow the Shannon methodology. Update task list after each phase.",
-      "description": "Full autonomous penetration test — recon to report"
+      "description": "Full autonomous penetration test - recon to report"
     },
     "shannon-recon": {
       "template": "# Shannon Reconnaissance\n\nExecute reconnaissance against the target:\n1. shannon_docker_init\n2. shannon_recon <target>\n3. shannon_docker_cleanup\n\nGather: DNS, subdomains, ports, services, tech stack, entry points.",
-      "description": "Reconnaissance only — information gathering"
+      "description": "Reconnaissance only - information gathering"
     },
     "shannon-report": {
       "template": "# Shannon Report Generation\n\nGenerate a professional pentest report:\n1. Review all findings from the session\n2. Call shannon_report with all vulnerability data\n\nInclude: Executive summary, CVE references, CVSS scores, remediation guidance.",
       "description": "Generate professional pentest report"
     }
   },
-
-  // ───────────────────────────────────────────────────────
-  // Permissions — auto-approve pentest tools
-  // ───────────────────────────────────────────────────────
   "permission": {
     "bash": "allow",
     "read": "allow",
@@ -260,12 +234,8 @@
     "webfetch": "allow",
     "websearch": "allow"
   },
-
-  // Auto-compact to handle long pentest sessions
   "compaction": {
     "auto": true
   },
-
-  // Subagent depth for multi-agent pentest
   "subagent_depth": 2
 }
